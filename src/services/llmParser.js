@@ -1,7 +1,7 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 async function parseMessage(message) {
   const prompt = `
@@ -26,17 +26,31 @@ async function parseMessage(message) {
     const response = await result.response;
     const text = response.text();
     
-    // Attempt to parse the JSON string. Gemini might sometimes include markdown backticks.
+    // 清理回應並解析JSON
     let jsonString = text.replace(/```json\n|```/g, '').trim();
-    return JSON.parse(jsonString);
+    const parsedData = JSON.parse(jsonString);
+    
+    // 檢測URL
+    const urlMatch = message.match(/(https?:\/\/[^\s]+)/g);
+    if (urlMatch && urlMatch.length > 0) {
+      parsedData.url = urlMatch[0];
+      parsedData.category = "Link";
+    }
+    
+    return parsedData;
   } catch (error) {
     console.error('Error parsing message with LLM:', error);
+    
+    // 檢測URL的備用方案
+    const urlMatch = message.match(/(https?:\/\/[^\s]+)/g);
+    const isUrl = urlMatch && urlMatch.length > 0;
+    
     // Fallback to a default structure if LLM parsing fails
     return {
-      category: "Other",
+      category: isUrl ? "Link" : "Other",
       title: message.substring(0, 50) + (message.length > 50 ? "..." : ""),
       content: message,
-      url: "",
+      url: isUrl ? urlMatch[0] : "",
       apiKey: "",
       documentInfo: ""
     };
