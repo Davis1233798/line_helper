@@ -1,0 +1,23 @@
+# Node.js
+/node_modules
+/node_modules/*
+/node_modules/
+/node_modules/**
+/node_modules/**/*
+/node_modules/**/**
+/node_modules/**/**/*
+/node_modules/**/**/**
+npm-debug.log
+
+# Environment variables
+.env
+
+# Logs
+*.log
+
+# IDEs
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
