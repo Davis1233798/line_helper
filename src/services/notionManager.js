@@ -5,13 +5,37 @@ const databaseId = process.env.NOTION_DATABASE_ID;
 
 async function saveToNotion(data) {
   try {
-    // 準備頁面屬性，只包含存在的欄位
+    // 先獲取資料庫結構
+    const database = await notion.databases.retrieve({ database_id: databaseId });
+    console.log('Database properties:', Object.keys(database.properties));
+    
+    // 準備頁面屬性
     const properties = {};
     
-    // 嘗試設置標題欄位 (通常是 Name 或 Title)
-    if (data.title) {
-      // 首先嘗試 Name (Notion預設)
-      properties['Name'] = {
+    // 尋找標題欄位 - 嘗試多種可能的名稱
+    const titleFieldNames = ['Name', 'Title', '標題', '名稱', 'name', 'title'];
+    let titleFieldName = null;
+    
+    for (const fieldName of titleFieldNames) {
+      if (database.properties[fieldName] && database.properties[fieldName].type === 'title') {
+        titleFieldName = fieldName;
+        break;
+      }
+    }
+    
+    // 如果找不到，使用第一個title類型的欄位
+    if (!titleFieldName) {
+      for (const [fieldName, property] of Object.entries(database.properties)) {
+        if (property.type === 'title') {
+          titleFieldName = fieldName;
+          break;
+        }
+      }
+    }
+    
+    // 設置標題
+    if (titleFieldName && data.title) {
+      properties[titleFieldName] = {
         title: [
           {
             text: {
@@ -22,19 +46,20 @@ async function saveToNotion(data) {
       };
     }
     
-    // 嘗試設置分類 (根據錯誤訊息，這應該是multi_select)
-    if (data.category) {
-      properties['Category'] = {
-        multi_select: [
-          {
-            name: data.category,
-          }
-        ],
-      };
+    // 設置其他欄位 - 只有在資料庫中存在時才添加
+    if (database.properties['Category']) {
+      if (database.properties['Category'].type === 'multi_select' && data.category) {
+        properties['Category'] = {
+          multi_select: [{ name: data.category }]
+        };
+      } else if (database.properties['Category'].type === 'select' && data.category) {
+        properties['Category'] = {
+          select: { name: data.category }
+        };
+      }
     }
     
-    // 設置內容
-    if (data.content) {
+    if (database.properties['Content'] && data.content) {
       properties['Content'] = {
         rich_text: [
           {
@@ -46,21 +71,26 @@ async function saveToNotion(data) {
       };
     }
     
-    // 設置URL (根據錯誤訊息，這應該是rich_text)
-    if (data.url) {
-      properties['URL'] = {
-        rich_text: [
-          {
-            text: {
-              content: data.url,
+    if (database.properties['URL'] && data.url) {
+      if (database.properties['URL'].type === 'url') {
+        properties['URL'] = {
+          url: data.url,
+        };
+      } else if (database.properties['URL'].type === 'rich_text') {
+        properties['URL'] = {
+          rich_text: [
+            {
+              text: {
+                content: data.url,
+              },
             },
-          },
-        ],
-      };
+          ],
+        };
+      }
     }
     
-    // 只有在有API Key時才添加 (如果資料庫有這個欄位)
-    if (data.apiKey) {
+    // API Key欄位
+    if (database.properties['API Key'] && data.apiKey) {
       properties['API Key'] = {
         rich_text: [
           {
@@ -72,8 +102,8 @@ async function saveToNotion(data) {
       };
     }
     
-    // 只有在有文檔資訊時才添加 (如果資料庫有這個欄位)
-    if (data.documentInfo) {
+    // Document Info欄位
+    if (database.properties['Document Info'] && data.documentInfo) {
       properties['Document Info'] = {
         rich_text: [
           {
@@ -85,6 +115,8 @@ async function saveToNotion(data) {
       };
     }
 
+    console.log('Creating page with properties:', Object.keys(properties));
+    
     const response = await notion.pages.create({
       parent: { database_id: databaseId },
       properties: properties,
@@ -94,33 +126,37 @@ async function saveToNotion(data) {
   } catch (error) {
     console.error('Error saving to Notion:', error.body || error);
     
-    // 如果失敗，嘗試只用最基本的欄位重新儲存
+    // 如果還是失敗，嘗試最小化的儲存
     try {
-      console.log('Attempting to save with minimal properties...');
+      console.log('Trying minimal save - getting database structure...');
+      const database = await notion.databases.retrieve({ database_id: databaseId });
+      
+      // 找到任何title欄位
+      let titleField = null;
+      for (const [fieldName, property] of Object.entries(database.properties)) {
+        if (property.type === 'title') {
+          titleField = fieldName;
+          break;
+        }
+      }
+      
+      if (!titleField) {
+        throw new Error('No title field found in database');
+      }
+      
       const minimalProperties = {
-        'Name': {
+        [titleField]: {
           title: [
             {
               text: {
-                content: data.title || data.content?.substring(0, 100) || 'Untitled',
+                content: data.title || data.content?.substring(0, 100) || data.url || 'Untitled',
               },
             },
           ],
         }
       };
       
-      // 如果有內容，添加到rich_text欄位
-      if (data.content) {
-        minimalProperties['Content'] = {
-          rich_text: [
-            {
-              text: {
-                content: data.content,
-              },
-            },
-          ],
-        };
-      }
+      console.log(`Using title field: ${titleField}`);
       
       const fallbackResponse = await notion.pages.create({
         parent: { database_id: databaseId },
@@ -130,7 +166,7 @@ async function saveToNotion(data) {
       return fallbackResponse.url;
     } catch (fallbackError) {
       console.error('Fallback save also failed:', fallbackError.body || fallbackError);
-      throw error; // 拋出原始錯誤
+      throw error;
     }
   }
 }
