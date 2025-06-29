@@ -309,6 +309,59 @@ async function saveToNotion(data) {
   }
 }
 
+// 獲取所有Notion資料以供本地快取或搜尋
+async function getNotionData() {
+  try {
+    const allPages = [];
+    let hasMore = true;
+    let startCursor = undefined;
+    
+    while (hasMore) {
+      const response = await notion.databases.query({
+        database_id: databaseId,
+        start_cursor: startCursor,
+        page_size: 100
+      });
+
+      allPages.push(...response.results);
+      hasMore = response.has_more;
+      startCursor = response.next_cursor;
+    }
+    
+    console.log(`從 Notion 獲取了 ${allPages.length} 筆資料`);
+
+    // 將頁面轉換為簡化格式
+    const simplifiedData = allPages.map(page => {
+      // 提取標題
+      const titleProp = Object.values(page.properties).find(prop => prop.type === 'title');
+      const title = titleProp ? titleProp.title[0]?.plain_text || '無標題' : '無標題';
+      
+      // 提取URL
+      const urlProp = page.properties['URL'];
+      const url = urlProp && urlProp.url ? urlProp.url : '';
+      
+      // 提取類別
+      const categoryProp = page.properties['Category'];
+      let category = '';
+      if (categoryProp) {
+        if (categoryProp.type === 'multi_select') {
+          category = categoryProp.multi_select.map(item => item.name).join(', ');
+        } else if (categoryProp.type === 'select') {
+          category = categoryProp.select.name;
+        }
+      }
+      
+      return { id: page.id, title, url, category };
+    });
+
+    return simplifiedData;
+
+  } catch (error) {
+    console.error('從 Notion 獲取資料時發生錯誤：', error);
+    return [];
+  }
+}
+
 // 搜尋 Notion 資料庫
 async function searchNotion(keyword, category = null) {
   try {
@@ -536,4 +589,5 @@ module.exports = {
   saveBatchToNotion,
   checkUrlExists,
   searchNotion,
+  getNotionData
 };
