@@ -116,63 +116,37 @@ function extractDateTimeInfo(websiteData) {
 
 // 生成 Google 行事曆連結
 function generateGoogleCalendarLink(event) {
-  const startDate = event.date;
-  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000); // 預設1小時
+  const baseUrl = 'https://calendar.google.com/calendar/render?action=TEMPLATE';
+  const title = encodeURIComponent(event.title);
+  const startTime = event.date.toISOString().replace(/-|:|\.\d{3}/g, '');
+  const endTime = new Date(event.date.getTime() + 60 * 60 * 1000).toISOString().replace(/-|:|\.\d{3}/g, '');
+  const details = encodeURIComponent(event.description);
   
-  const formatDate = (date) => {
-    return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-  };
-  
-  const params = new URLSearchParams({
-    action: 'TEMPLATE',
-    text: event.title,
-    dates: `${formatDate(startDate)}/${formatDate(endDate)}`,
-    details: event.description,
-    location: '',
-    sf: 'true',
-    output: 'xml'
-  });
-  
-  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+  return `${baseUrl}&text=${title}&dates=${startTime}/${endTime}&details=${details}&sf=true&output=xml`;
 }
 
 // 生成 Apple 行事曆連結 (ICS 格式)，透過外部服務產生可下載連結
 async function generateAppleCalendarLink(event) {
-  const startDate = event.date;
-  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
-
-  const formatDate = (date) => {
-    return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-  };
+  const uid = `${Date.now()}@linenotionbot.com`;
+  const startTime = event.date.toISOString().replace(/-|:|\.\d{3}/g, '');
+  const endTime = new Date(event.date.getTime() + 60 * 60 * 1000).toISOString().replace(/-|:|\.\d{3}/g, '');
 
   const icsContent = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
     'PRODID:-//Line Notion Bot//Event//EN',
     'BEGIN:VEVENT',
-    `DTSTART:${formatDate(startDate)}`,
-    `DTEND:${formatDate(endDate)}`,
+    `DTSTART:${startTime}`,
+    `DTEND:${endTime}`,
     `SUMMARY:${event.title}`,
     `DESCRIPTION:${event.description}`,
-    `UID:${Date.now()}@linenotionbot.com`,
+    `UID:${uid}`,
     'END:VEVENT',
     'END:VCALENDAR'
-  ].join('\r\n');
+  ].join('\\r\\n');
 
-  try {
-    // 使用 hastebin 服務來託管 .ics 內容
-    const response = await axios.post('https://hastebin.com/documents', icsContent, {
-      headers: { 'Content-Type': 'text/plain' }
-    });
-    
-    // 組成可直接下載的 raw 連結
-    const key = response.data.key;
-    return `https://hastebin.com/raw/${key}`;
-  } catch (error) {
-    console.error('上傳 ICS 內容到 hastebin 失敗:', error.message);
-    // 備用方案：如果上傳失敗，仍然使用 data URI
-    return `data:text/calendar;charset=utf8,${encodeURIComponent(icsContent)}`;
-  }
+  // 使用 encodeURIComponent 確保特殊字元被正確處理
+  return `data:text/calendar;charset=utf-8,${encodeURIComponent(icsContent)}`;
 }
 
 // 生成行事曆資訊

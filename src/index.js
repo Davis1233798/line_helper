@@ -266,135 +266,85 @@ function parseSearchQuery(message) {
 }
 
 async function handleEvent(event) {
-  if (event.type !== 'message' || event.message.type !== 'text') {
-    return Promise.resolve(null);
-  }
-
-  const userMessage = event.message.text;
-  console.log(`收到訊息：${userMessage}`);
-
   try {
-    // 檢測是否為查詢請求
-    const isSearchQuery = userMessage.includes('查詢') || 
-                         userMessage.includes('搜尋') || 
-                         userMessage.includes('找') || 
-                         userMessage.includes('查找') ||
-                         userMessage.startsWith('查') ||
-                         userMessage.includes('search');
-    
-    if (isSearchQuery) {
-      // 處理搜尋請求
-      return await handleSearchQuery(event, userMessage);
+    if (event.type !== 'message' || event.message.type !== 'text') {
+      return;
     }
 
-    // 原有的處理邏輯
-    // 1. 使用 LLM 解析訊息 (現在回傳陣列)
-    const parsedDataArray = await llmParser.parseMessage(userMessage);
-    console.log('已解析的資料：', parsedDataArray);
+    const userMessage = event.message.text;
 
-    // 1.1. 檢查行事曆資訊
-    let calendarEvents = [];
-    parsedDataArray.forEach(item => {
-      if (item.calendarInfo && item.calendarInfo.length > 0) {
-        calendarEvents = calendarEvents.concat(item.calendarInfo);
-      }
-    });
-    console.log('發現行事曆事件：', calendarEvents);
+    // 關鍵字判斷是否為搜尋
+    const isSearch = /查詢|搜尋|找|查找|查|search/.test(userMessage.substring(0, 10));
 
-    // 2. 批量儲存至 Notion
-    const results = await notionManager.saveBatchToNotion(parsedDataArray);
-    console.log('Notion 儲存結果：', results);
-
-    // 3. 建立回覆訊息
-    const successCount = results.filter(r => r.success).length;
-    const totalCount = results.length;
-    
-    let replyMessage = '';
-    
-    if (totalCount === 1) {
-      // 單個項目的情況
-      const result = results[0];
-      replyMessage = result.success 
-        ? `✅ ${result.message}\n${result.url}`
-        : `❌ ${result.message}`;
-    } else {
-      // 多個項目的情況
-      replyMessage = `處理完成！成功：${successCount} 個，總計：${totalCount} 個\n\n`;
-      
-      results.forEach((result, index) => {
-        if (result.success) {
-          replyMessage += `✅ ${result.title}\n`;
-        } else {
-          replyMessage += `❌ ${result.title} - ${result.message}\n`;
-        }
-      });
-      
-      // 新增成功儲存的連結（限制數量避免訊息過長）
-      const successUrls = results.filter(r => r.success && r.url).slice(0, 3);
-      if (successUrls.length > 0) {
-        replyMessage += '\n📝 查看新增的項目：\n';
-        successUrls.forEach(result => {
-          replyMessage += `${result.url}\n`;
-        });
-      }
+    if (isSearch) {
+      await handleSearchQuery(event, userMessage);
+      return;
     }
 
-    // 3.1. 加入行事曆資訊到回覆
-    if (calendarEvents.length > 0) {
-      replyMessage += '\n\n📅 發現重要日期：\n';
-      
-      try {
-        // 非同步處理行事曆事件新增
-        const calendarPromises = calendarEvents.map(event => 
-          googleCalendarManager.addEventToCalendar(event)
-        );
-        const calendarResults = await Promise.all(calendarPromises);
+    // 如果不是搜尋查詢，繼續進行解析和儲存
+    const parsedInfo = await llmParser.parseMessage(userMessage);
 
-        calendarResults.forEach((calResult, index) => {
-          const event = calendarEvents[index];
-          const eventDate = new Date(event.date);
-          const formattedDate = eventDate.toLocaleString('zh-TW', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-          });
-          
-          replyMessage += `\n${index + 1}. ${event.title} - ${formattedDate}\n`;
-          if (calResult.success) {
-            replyMessage += `✅ ${calResult.message}\n`;
-            replyMessage += `🔗 查看事件: ${calResult.url}\n`;
-          } else {
-            replyMessage += `❌ ${calResult.message}\n`;
-            // 如果自動新增失敗，提供手動連結
-            replyMessage += `🔗 手動新增Google日曆: ${event.googleCalendarUrl}\n`;
-          }
-          // 無論成功與否，都提供Apple Calendar的下載連結
-          replyMessage += `🍎 手動下載Apple日曆: ${event.appleCalendarUrl}\n`;
-        });
-      } catch (calendarError) {
-        console.error('處理行事曆事件時發生嚴重錯誤:', calendarError);
-        replyMessage += '\n\n⚠️ 自動新增行事曆功能暫時無法使用。';
-      }
-    }
-
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: replyMessage,
-    });
-  } catch (error) {
-    console.error('處理事件時發生錯誤：', error);
-    
-    // 嘗試回覆錯誤訊息給使用者
-    try {
+    // 防禦性程式碼：確保 parsedInfo 存在
+    if (!parsedInfo) {
+      console.log("解析結果為空，不進行任何操作。");
       return client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '處理您的訊息時發生錯誤，請稍後再試。',
+        text: '無法處理您的訊息，請確認內容或網址是否正確。',
       });
-    } catch (replyError) {
-      console.error('傳送回覆時發生錯誤：', replyError);
     }
+
+    const notionResult = await notionManager.saveToNotion(parsedInfo);
+
+    if (notionResult.success) {
+      let replyMessage = `✅ 已成功儲存：${notionResult.title}\n${notionResult.url}`;
+
+      // 處理日曆事件並產生連結
+      if (parsedInfo.events && parsedInfo.events.length > 0) {
+        replyMessage += '\n\n📅 發現重要日期：';
+
+        for (const [index, calEvent] of parsedInfo.events.entries()) {
+          replyMessage += `\n\n${index + 1}. ${calEvent.title} - ${calEvent.description}`;
+
+          // 嘗試自動新增到 Google Calendar
+          const googleCalResult = await googleCalendarManager.addEventToCalendar(calEvent);
+
+          if (googleCalResult.success) {
+            replyMessage += `\n✅ 已自動新增至Google日曆: ${googleCalResult.eventLink}`;
+          } else {
+            // 自動新增失敗，提供手動連結
+            replyMessage += `\n❌ ${googleCalResult.error}`;
+            const googleLink = llmParser.generateGoogleCalendarLink(calEvent);
+            const appleLink = await llmParser.generateAppleCalendarLink(calEvent); // This one is async
+            replyMessage += `\n🔗 手動新增Google日曆: ${googleLink}`;
+            replyMessage += `\n🍎 手動下載Apple日曆: ${appleLink}`;
+          }
+        }
+      }
+
+      // 檢查訊息長度
+      if (replyMessage.length > 5000) {
+        replyMessage = replyMessage.substring(0, 4950) + '\n...（訊息過長，部分內容已省略）';
+      }
+
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: replyMessage,
+      });
+    } else {
+      console.error('儲存到 Notion 失敗:', notionResult.error);
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `儲存到 Notion 失敗：${notionResult.error}`,
+      });
+    }
+  } catch (error) {
+    console.error('處理事件時發生錯誤：', error);
+    // 避免洩漏詳細錯誤給使用者
+    const userFacingError = error.message.includes('URL') ? '處理的網址似乎無效，請檢查。' : '處理您的請求時發生未預期的錯誤，請稍後再試。';
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: userFacingError,
+    });
   }
 }
 
