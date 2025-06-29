@@ -201,18 +201,30 @@ async function generateCalendarInfo(events) {
 // 改進的網站內容抓取函數
 async function fetchWebsiteContent(url) {
   try {
-    const response = await axios.get(url, {
+    const response = await axios.get(url, { 
       timeout: 15000,
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
     });
-    const dom = new JSDOM(response.data);
-    const reader = new (require('whatwg-encoding').getTextDecoder)();
-    const bodyText = dom.window.document.body.textContent || '';
     
+    const $ = cheerio.load(response.data);
+    
+    // 移除不必要的標籤
+    $('script, style, noscript, iframe, link, meta').remove();
+    
+    const title = $('title').text().trim() || 
+                  $('h1').first().text().trim() ||
+                  '';
+
+    const description = $('meta[name="description"]').attr('content') ||
+                       $('p').first().text().trim() ||
+                       '';
+
+    const rawContent = $('body').text().replace(/\s+/g, ' ').trim();
+
     return {
-      title: dom.window.document.title,
-      description: dom.window.document.querySelector('meta[name="description"]')?.content || '',
-      rawContent: bodyText.replace(/\s+/g, ' ').trim(),
+      title: title,
+      description: description,
+      rawContent: rawContent.substring(0, 10000), // 限制內容長度
     };
   } catch (error) {
     console.error(`Error fetching website content for ${url}:`, error.message);
