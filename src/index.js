@@ -287,6 +287,15 @@ async function handleEvent(event) {
     const parsedDataArray = await llmParser.parseMessage(userMessage);
     console.log('已解析的資料：', parsedDataArray);
 
+    // 1.1. 檢查行事曆資訊
+    let calendarEvents = [];
+    parsedDataArray.forEach(item => {
+      if (item.calendarInfo && item.calendarInfo.length > 0) {
+        calendarEvents = calendarEvents.concat(item.calendarInfo);
+      }
+    });
+    console.log('發現行事曆事件：', calendarEvents);
+
     // 2. 批量儲存至 Notion
     const results = await notionManager.saveBatchToNotion(parsedDataArray);
     console.log('Notion 儲存結果：', results);
@@ -323,6 +332,27 @@ async function handleEvent(event) {
           replyMessage += `${result.url}\n`;
         });
       }
+    }
+
+    // 3.1. 加入行事曆資訊到回覆
+    if (calendarEvents.length > 0) {
+      replyMessage += '\n\n📅 發現重要日期：\n';
+      calendarEvents.forEach((event, index) => {
+        const eventDate = new Date(event.date);
+        const formattedDate = eventDate.toLocaleString('zh-TW', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        
+        replyMessage += `\n${index + 1}. ${event.title}\n`;
+        replyMessage += `📅 ${formattedDate}\n`;
+        replyMessage += `📝 ${event.description}\n`;
+        replyMessage += `🔗 Google行事曆: ${event.googleCalendarUrl}\n`;
+        replyMessage += `🍎 Apple行事曆: ${event.appleCalendarUrl}\n`;
+      });
     }
 
     return client.replyMessage(event.replyToken, {
