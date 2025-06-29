@@ -67,15 +67,18 @@ async function saveBatchToNotion(dataArray) {
 }
 
 async function saveToNotion(data) {
+  console.log("--- 開始儲存到 Notion ---");
+  console.log("接收到的資料:", JSON.stringify(data, null, 2));
+
+  if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
+    console.error("錯誤：傳入 saveToNotion 的資料為空或無效。");
+    return { success: false, error: "傳入的解析資料為空。" };
+  }
+
   try {
-    // 先獲取資料庫結構
     const database = await notion.databases.retrieve({ database_id: databaseId });
-    console.log('Database properties:', Object.keys(database.properties));
-    
-    // 準備頁面屬性
     const properties = {};
     
-    // 尋找標題欄位 - 嘗試多種可能的名稱
     const titleFieldNames = ['Name', 'Title', '標題', '名稱', 'name', 'title', 'ttitle'];
     let titleFieldName = null;
     
@@ -86,7 +89,6 @@ async function saveToNotion(data) {
       }
     }
     
-    // 如果找不到，使用第一個title類型的欄位
     if (!titleFieldName) {
       for (const [fieldName, property] of Object.entries(database.properties)) {
         if (property.type === 'title') {
@@ -95,217 +97,78 @@ async function saveToNotion(data) {
         }
       }
     }
-    
-    // 設置標題
+    console.log("找到的標題欄位:", titleFieldName);
+
     if (titleFieldName && data.title) {
       properties[titleFieldName] = {
-        title: [
-          {
-            text: {
-              content: data.title,
-            },
-          },
-        ],
+        title: [{ text: { content: data.title } }],
       };
-    }
-    
-    // 設置其他欄位 - 只有在資料庫中存在時才添加
-    if (database.properties['Category']) {
-      if (database.properties['Category'].type === 'multi_select') {
-        // 對於 multi_select，結合主分類和標籤
-        const categoryTags = [];
-        if (data.category) {
-          categoryTags.push({ name: data.category });
-        }
-        if (data.tags && Array.isArray(data.tags)) {
-          data.tags.forEach(tag => {
-            if (tag && tag.trim()) {
-              categoryTags.push({ name: tag.trim() });
-            }
-          });
-        }
-        
-        if (categoryTags.length > 0) {
-          properties['Category'] = {
-            multi_select: categoryTags
-          };
-        }
-      } else if (database.properties['Category'].type === 'select' && data.category) {
-        // 對於 select，只使用主分類
-        properties['Category'] = {
-          select: { name: data.category }
-        };
-      }
-    }
-    
-    // Content欄位 - 保持原始訊息內容
-    if (database.properties['Content'] && data.content) {
-      properties['Content'] = {
-        rich_text: [
-          {
-            text: {
-              content: data.content.length > 2000 ? data.content.substring(0, 2000) + '...' : data.content,
-            },
-          },
-        ],
-      };
-    }
-    
-    // Info欄位 - 功能介紹
-    if (database.properties['Info'] && data.info) {
-      properties['Info'] = {
-        rich_text: [
-          {
-            text: {
-              content: data.info,
-            },
-          },
-        ],
-      };
-    }
-    
-    // 如果沒有Info欄位，檢查其他可能的欄位名稱
-    if (!database.properties['Info'] && data.info) {
-      const infoFieldNames = ['功能介紹', 'Description', 'DESCRIPTION', '描述', 'info'];
-      for (const fieldName of infoFieldNames) {
-        if (database.properties[fieldName]) {
-          properties[fieldName] = {
-            rich_text: [
-              {
-                text: {
-                  content: data.info,
-                },
-              },
-            ],
-          };
-          break;
-        }
-      }
-    }
-    
-    if (database.properties['URL'] && data.url) {
-      if (database.properties['URL'].type === 'url') {
-        properties['URL'] = {
-          url: data.url,
-        };
-      } else if (database.properties['URL'].type === 'rich_text') {
-        properties['URL'] = {
-          rich_text: [
-            {
-              text: {
-                content: data.url,
-              },
-            },
-          ],
-        };
-      }
-    }
-    
-    // API Key欄位
-    if (database.properties['API Key'] && data.apiKey) {
-      properties['API Key'] = {
-        rich_text: [
-          {
-            text: {
-              content: data.apiKey,
-            },
-          },
-        ],
-      };
-    }
-    
-    // API KEY欄位（大寫版本）
-    if (database.properties['API KEY'] && data.apiKey) {
-      properties['API KEY'] = {
-        rich_text: [
-          {
-            text: {
-              content: data.apiKey,
-            },
-          },
-        ],
-      };
-    }
-    
-    // Document Info欄位
-    if (database.properties['Document Info'] && data.documentInfo) {
-      properties['Document Info'] = {
-        rich_text: [
-          {
-            text: {
-              content: data.documentInfo,
-            },
-          },
-        ],
-      };
-    }
-    
-    // DOCUMENT INFO欄位（大寫版本）
-    if (database.properties['DOCUMENT INFO'] && data.documentInfo) {
-      properties['DOCUMENT INFO'] = {
-        rich_text: [
-          {
-            text: {
-              content: data.documentInfo,
-            },
-          },
-        ],
-      };
+      console.log("已設定標題屬性。");
     }
 
-    console.log('Creating page with properties:', Object.keys(properties));
+    const categoryFieldName = 'Category';
+    if (database.properties[categoryFieldName] && data.category) {
+        if (database.properties[categoryFieldName].type === 'multi_select') {
+            const categoryTags = [{ name: data.category }];
+            if (data.tags && Array.isArray(data.tags)) {
+                data.tags.forEach(tag => { if (tag && tag.trim()) { categoryTags.push({ name: tag.trim() }); } });
+            }
+            properties[categoryFieldName] = { multi_select: categoryTags };
+        } else if (database.properties[categoryFieldName].type === 'select') {
+            properties[categoryFieldName] = { select: { name: data.category } };
+        }
+        console.log("已設定分類屬性。");
+    }
     
+    const infoFieldName = 'info'; // 從日誌得知是小寫
+    if (database.properties[infoFieldName] && data.info) {
+        properties[infoFieldName] = { rich_text: [{ text: { content: data.info } }] };
+        console.log("已設定 info 屬性。");
+    }
+
+    const urlFieldName = 'URL';
+    if (database.properties[urlFieldName] && data.url) {
+        if (database.properties[urlFieldName].type === 'url') {
+            properties[urlFieldName] = { url: data.url };
+        } else if (database.properties[urlFieldName].type === 'rich_text') {
+            properties[urlFieldName] = { rich_text: [{ text: { content: data.url } }] };
+        }
+        console.log("已設定 URL 屬性。");
+    }
+    
+    const contentFieldName = 'Content';
+    if (database.properties[contentFieldName] && data.content) {
+        properties[contentFieldName] = { rich_text: [{ text: { content: data.content.substring(0, 2000) } }] };
+        console.log("已設定 Content 屬性。");
+    }
+
+    console.log("最終準備建立的頁面屬性:", JSON.stringify(Object.keys(properties)));
+
+    if (Object.keys(properties).length === 0) {
+      console.error("錯誤：沒有任何有效屬性可供建立頁面。");
+      throw new Error("沒有從解析資料中找到任何有效欄位可存入 Notion。");
+    }
+
     const response = await notion.pages.create({
       parent: { database_id: databaseId },
       properties: properties,
     });
     
-    return response.url;
-  } catch (error) {
-    console.error('Error saving to Notion:', error.body || error);
+    console.log("成功建立 Notion 頁面:", response.url);
+    const pageTitle = response.properties[titleFieldName]?.title[0]?.text?.content || '無標題';
     
-    // 如果還是失敗，嘗試最小化的儲存
-    try {
-      console.log('Trying minimal save - getting database structure...');
-      const database = await notion.databases.retrieve({ database_id: databaseId });
-      
-      // 找到任何title欄位
-      let titleField = null;
-      for (const [fieldName, property] of Object.entries(database.properties)) {
-        if (property.type === 'title') {
-          titleField = fieldName;
-          break;
-        }
-      }
-      
-      if (!titleField) {
-        throw new Error('No title field found in database');
-      }
-      
-      const minimalProperties = {
-        [titleField]: {
-          title: [
-            {
-              text: {
-                content: data.title || data.content?.substring(0, 100) || data.url || 'Untitled',
-              },
-            },
-          ],
-        }
-      };
-      
-      console.log(`Using title field: ${titleField}`);
-      
-      const fallbackResponse = await notion.pages.create({
-        parent: { database_id: databaseId },
-        properties: minimalProperties,
-      });
-      
-      return fallbackResponse.url;
-    } catch (fallbackError) {
-      console.error('Fallback save also failed:', fallbackError.body || fallbackError);
-      throw error;
-    }
+    return {
+      success: true,
+      url: response.url,
+      title: pageTitle,
+    };
+    
+  } catch (error) {
+    console.error('在 saveToNotion 中發生錯誤:', error.message);
+    return {
+      success: false,
+      error: error.message || '儲存至 Notion 時發生未知錯誤。',
+    };
   }
 }
 
