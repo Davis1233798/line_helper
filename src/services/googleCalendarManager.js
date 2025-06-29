@@ -10,7 +10,15 @@ if (process.env.GOOGLE_CREDENTIALS_JSON) {
   // 生產環境：從環境變數讀取憑證
   try {
     // 解決從環境變數讀取時，換行符被轉義成 \\n 的問題
-    const credentialsString = process.env.GOOGLE_CREDENTIALS_JSON.replace(/\\n/g, '\n');
+    // 同時移除可能由複製貼上產生的非法控制字元
+    let credentialsString = process.env.GOOGLE_CREDENTIALS_JSON;
+    credentialsString = credentialsString.replace(/\\n/g, '\n');
+    credentialsString = credentialsString.replace(/[\x00-\x1F\x7F]/g, (match) => {
+      // 保留 private_key 中的 \n
+      if (match === '\n') return '\n';
+      return '';
+    });
+    
     const credentials = JSON.parse(credentialsString);
     auth = new google.auth.GoogleAuth({
       credentials,
