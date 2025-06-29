@@ -3,6 +3,7 @@ const express = require('express');
 const line = require('@line/bot-sdk');
 const llmParser = require('./services/llmParser');
 const notionManager = require('./services/notionManager');
+const googleCalendarManager = require('./services/googleCalendarManager');
 
 // 檢查必要的環境變數
 const requiredEnvVars = [
@@ -337,7 +338,15 @@ async function handleEvent(event) {
     // 3.1. 加入行事曆資訊到回覆
     if (calendarEvents.length > 0) {
       replyMessage += '\n\n📅 發現重要日期：\n';
-      calendarEvents.forEach((event, index) => {
+      
+      // 非同步處理行事曆事件新增
+      const calendarPromises = calendarEvents.map(event => 
+        googleCalendarManager.addEventToCalendar(event)
+      );
+      const calendarResults = await Promise.all(calendarPromises);
+
+      calendarResults.forEach((calResult, index) => {
+        const event = calendarEvents[index];
         const eventDate = new Date(event.date);
         const formattedDate = eventDate.toLocaleString('zh-TW', {
           year: 'numeric',
@@ -347,11 +356,15 @@ async function handleEvent(event) {
           minute: '2-digit'
         });
         
-        replyMessage += `\n${index + 1}. ${event.title}\n`;
-        replyMessage += `📅 ${formattedDate}\n`;
-        replyMessage += `📝 ${event.description}\n`;
-        replyMessage += `🔗 Google行事曆: ${event.googleCalendarUrl}\n`;
-        replyMessage += `🍎 Apple行事曆: ${event.appleCalendarUrl}\n`;
+        replyMessage += `\n${index + 1}. ${event.title} - ${formattedDate}\n`;
+        if (calResult.success) {
+          replyMessage += `✅ ${calResult.message}\n`;
+          replyMessage += `🔗 查看事件: ${calResult.url}\n`;
+        } else {
+          replyMessage += `❌ ${calResult.message}\n`;
+          // 如果自動新增失敗，提供手動連結
+          replyMessage += `🔗 手動新增Google日曆: ${event.googleCalendarUrl}\n`;
+        }
       });
     }
 
