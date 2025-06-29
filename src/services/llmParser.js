@@ -9,7 +9,7 @@ const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 async function fetchWebsiteContent(url) {
   try {
     const response = await axios.get(url, {
-      timeout: 10000,
+      timeout: 5000, // 縮短超時時間
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
       }
@@ -24,33 +24,38 @@ async function fetchWebsiteContent(url) {
     const title = $('title').text().trim() || 
                   $('h1').first().text().trim() ||
                   $('meta[property="og:title"]').attr('content') ||
-                  '';
+                  url.replace('https://', '').replace('http://', '');
     
-    // 取得描述
+    // 取得簡短描述
     const description = $('meta[name="description"]').attr('content') ||
                        $('meta[property="og:description"]').attr('content') ||
                        $('p').first().text().trim() ||
-                       '';
-    
-    // 取得主要內容
-    const content = $('main').text() || 
-                   $('article').text() || 
-                   $('.content').text() ||
-                   $('body').text();
+                       'AI工具網站';
     
     return {
-      title: title || 'No title found',
-      description: description || 'No description found',
-      content: content.replace(/\s+/g, ' ').trim().substring(0, 500) + '...'
+      title: title.substring(0, 100),
+      description: description.substring(0, 200)
     };
   } catch (error) {
-    console.error(`Error fetching website content for ${url}:`, error.message);
+    console.error(`Error fetching ${url}:`, error.message);
+    const siteName = url.replace('https://', '').replace('http://', '').split('/')[0];
     return {
-      title: url,
-      description: 'Unable to fetch website content',
-      content: 'Website content could not be retrieved'
+      title: siteName,
+      description: 'AI工具網站'
     };
   }
+}
+
+// 批量抓取網站內容
+async function fetchMultipleWebsiteContents(urls) {
+  const promises = urls.slice(0, 10).map(url => 
+    fetchWebsiteContent(url).catch(error => ({
+      title: url.replace('https://', '').replace('http://', ''),
+      description: 'AI工具'
+    }))
+  );
+  
+  return await Promise.all(promises);
 }
 
 // 解析包含多個連結的訊息
@@ -78,27 +83,14 @@ async function parseMultipleLinks(message, urls) {
     return url;
   });
   
-  console.log('Processing URLs:', fullUrls);
+  console.log(`Processing ${fullUrls.length} URLs`);
   
   const prompt = `
-你是一個智能連結分析助手。請分析以下包含多個網站連結的文本，並為每個連結提取相關信息。
+分析文本中的AI工具連結，為每個連結提取簡要信息。
+回傳JSON陣列格式：
+[{"url":"完整網址","title":"工具名稱","description":"功能描述"}]
 
-請為每個連結返回一個JSON對象，格式如下：
-[
-  {
-    "url": "網站URL",
-    "title": "網站標題或描述",
-    "description": "網站功能描述"
-  }
-]
-
-請嚴格按照JSON格式輸出，不要包含任何額外的文字或解釋。請從文本中提取每個網站的功能描述。
-
-文本內容：
-"""${message}"""
-
-網站URL列表：
-${fullUrls.map(url => `- ${url}`).join('\n')}
+文本："""${message}"""
 `;
 
   try {
@@ -106,73 +98,70 @@ ${fullUrls.map(url => `- ${url}`).join('\n')}
     const response = await result.response;
     const text = response.text();
     
-    console.log('LLM Response:', text);
-    
-    // 清理回應並解析JSON
     let jsonString = text.replace(/```json\n|```/g, '').trim();
     let linkData = JSON.parse(jsonString);
     
-    // 確保linkData是陣列
     if (!Array.isArray(linkData)) {
       linkData = [linkData];
     }
     
-    // 如果LLM沒有回傳所有URL，用備用方案補充
+    // 如果LLM沒有回傳所有URL，補充缺失的
     if (linkData.length < fullUrls.length) {
-      console.log('LLM did not return all URLs, using fallback for missing ones');
       const processedUrls = new Set(linkData.map(item => item.url));
       
       for (const url of fullUrls) {
         if (!processedUrls.has(url)) {
           linkData.push({
             url: url,
-            title: url.replace('https://', '').replace('http://', ''),
-            description: '待補充描述'
+            title: url.replace('https://', '').split('/')[0],
+            description: 'AI工具'
           });
         }
       }
     }
     
-    // 為每個連結抓取實際網站內容
-    const enrichedData = [];
+    // 批量抓取網站內容
+    const websiteContents = await fetchMultipleWebsiteContents(fullUrls);
     
-    for (const link of linkData) {
-      console.log(`Fetching content for: ${link.url}`);
-      const websiteContent = await fetchWebsiteContent(link.url);
+    // 建立最終資料
+    const enrichedData = fullUrls.map((url, index) => {
+      const linkInfo = linkData.find(item => item.url === url) || {
+        title: url.replace('https://', '').split('/')[0],
+        description: 'AI工具'
+      };
       
-      enrichedData.push({
-        category: "Link",
-        title: websiteContent.title || link.title,
-        content: `${link.description}\n\n網站摘要：${websiteContent.description}\n\n${websiteContent.content}`,
-        url: link.url,
-        apiKey: "",
-        documentInfo: ""
-      });
-    }
-    
-    console.log(`Created ${enrichedData.length} enriched data items`);
-    return enrichedData;
-  } catch (error) {
-    console.error('Error parsing multiple links with LLM:', error);
-    
-    // 備用方案：直接使用URL創建基本結構
-    console.log('Using fallback method for all URLs');
-    const fallbackData = [];
-    for (const url of fullUrls) {
-      console.log(`Fetching fallback content for: ${url}`);
-      const websiteContent = await fetchWebsiteContent(url);
+      const websiteContent = websiteContents[index] || {
+        title: linkInfo.title,
+        description: linkInfo.description
+      };
       
-      fallbackData.push({
+      return {
         category: "Link",
-        title: websiteContent.title,
-        content: websiteContent.description + '\n\n' + websiteContent.content,
+        title: websiteContent.title || linkInfo.title,
+        content: `${linkInfo.description} - ${websiteContent.description}`,
         url: url,
         apiKey: "",
         documentInfo: ""
-      });
-    }
+      };
+    });
     
-    console.log(`Created ${fallbackData.length} fallback data items`);
+    console.log(`Created ${enrichedData.length} items`);
+    return enrichedData;
+  } catch (error) {
+    console.error('Error parsing links:', error);
+    
+    // 備用方案
+    const websiteContents = await fetchMultipleWebsiteContents(fullUrls);
+    
+    const fallbackData = fullUrls.map((url, index) => ({
+      category: "Link",
+      title: websiteContents[index]?.title || url.replace('https://', '').split('/')[0],
+      content: `AI工具 - ${websiteContents[index]?.description || '實用工具'}`,
+      url: url,
+      apiKey: "",
+      documentInfo: ""
+    }));
+    
     return fallbackData;
   }
 }
@@ -217,7 +206,7 @@ async function parseSingleMessage(message) {
       // 如果是單個連結，也抓取網站內容
       const websiteContent = await fetchWebsiteContent(parsedData.url);
       parsedData.title = websiteContent.title || parsedData.title;
-      parsedData.content = parsedData.content + '\n\n網站摘要：' + websiteContent.description + '\n\n' + websiteContent.content;
+      parsedData.content = `${parsedData.content} - ${websiteContent.description}`;
     }
     
     return [parsedData]; // 返回陣列格式保持一致性
@@ -242,7 +231,7 @@ async function parseSingleMessage(message) {
     return [{
       category: isUrl ? "Link" : "Other",
       title: websiteContent ? websiteContent.title : message.substring(0, 50) + (message.length > 50 ? "..." : ""),
-      content: websiteContent ? websiteContent.description + '\n\n' + websiteContent.content : message,
+      content: websiteContent ? `AI工具 - ${websiteContent.description}` : message,
       url: isUrl ? url : "",
       apiKey: "",
       documentInfo: ""
