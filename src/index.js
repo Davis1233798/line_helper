@@ -139,53 +139,46 @@ async function handleEvent(event) {
   console.log(`Received message: ${userMessage}`);
 
   try {
-    // 1. Parse message with LLM
-    const parsedData = await llmParser.parseMessage(userMessage);
-    console.log('Parsed data:', parsedData);
+    // 1. Parse message with LLM (現在回傳陣列)
+    const parsedDataArray = await llmParser.parseMessage(userMessage);
+    console.log('Parsed data:', parsedDataArray);
 
-    // 2. Save to Notion
-    const notionResult = await notionManager.saveToNotion(parsedData);
-    console.log('Notion result:', notionResult);
+    // 2. 批量保存到Notion
+    const results = await notionManager.saveBatchToNotion(parsedDataArray);
+    console.log('Notion save results:', results);
 
-    // 3. Reply to Line user
-    let replyMessage;
+    // 3. 建立回覆訊息
+    const successCount = results.filter(r => r.success).length;
+    const totalCount = results.length;
     
-    // 處理多項目回應
-    if (notionResult && typeof notionResult === 'object' && notionResult.summary) {
-      replyMessage = `${notionResult.summary}\n\n`;
-      
-      // 顯示處理結果詳情
-      if (notionResult.results && notionResult.results.length > 0) {
-        const successItems = notionResult.results.filter(r => r.status === 'created');
-        const existingItems = notionResult.results.filter(r => r.status === 'existed');
-        const errorItems = notionResult.results.filter(r => r.status === 'error');
-        
-        if (successItems.length > 0) {
-          replyMessage += `✅ 新增項目：\n`;
-          successItems.forEach(item => {
-            replyMessage += `• ${item.title}\n`;
-          });
-        }
-        
-        if (existingItems.length > 0) {
-          replyMessage += `\n🔄 已存在項目：\n`;
-          existingItems.forEach(item => {
-            replyMessage += `• ${item.title}\n`;
-          });
-        }
-        
-        if (errorItems.length > 0) {
-          replyMessage += `\n❌ 處理失敗：\n`;
-          errorItems.forEach(item => {
-            replyMessage += `• ${item.title}\n`;
-          });
-        }
-      }
+    let replyMessage = '';
+    
+    if (totalCount === 1) {
+      // 單個項目的情況
+      const result = results[0];
+      replyMessage = result.success 
+        ? `✅ ${result.message}\n${result.url}`
+        : `❌ ${result.message}`;
     } else {
-      // 處理單一項目回應
-      replyMessage = notionResult 
-        ? `訊息已分類並儲存到 Notion！\n${notionResult}`
-        : '抱歉，未能成功分類您的訊息。';
+      // 多個項目的情況
+      replyMessage = `處理完成！成功：${successCount}個，總計：${totalCount}個\n\n`;
+      
+      results.forEach((result, index) => {
+        if (result.success) {
+          replyMessage += `✅ ${result.title}\n`;
+        } else {
+          replyMessage += `❌ ${result.title} - ${result.message}\n`;
+        }
+      });
+      
+      // 添加成功儲存的連結（限制數量避免訊息過長）
+      const successUrls = results.filter(r => r.success && r.url).slice(0, 3);
+      if (successUrls.length > 0) {
+        replyMessage += '\n📝 查看新增項目：\n';
+        successUrls.forEach(result => {
+          replyMessage += `${result.url}\n`;
+        });
+      }
     }
 
     return client.replyMessage(event.replyToken, {

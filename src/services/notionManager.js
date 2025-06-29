@@ -3,8 +3,8 @@ const { Client } = require('@notionhq/client');
 const notion = new Client({ auth: process.env.NOTION_API_TOKEN });
 const databaseId = process.env.NOTION_DATABASE_ID;
 
-// 檢查URL是否已存在於Notion數據庫中
-async function checkExistingUrl(url) {
+// 檢查URL是否已存在於資料庫中
+async function checkUrlExists(url) {
   try {
     const response = await notion.databases.query({
       database_id: databaseId,
@@ -16,85 +16,57 @@ async function checkExistingUrl(url) {
       }
     });
     
-    return response.results.length > 0 ? response.results[0] : null;
+    return response.results.length > 0;
   } catch (error) {
-    console.error('Error checking existing URL:', error);
-    return null;
+    console.error('Error checking URL existence:', error);
+    return false;
   }
 }
 
-// 儲存單一項目到Notion
-async function saveToNotion(data) {
-  try {
-    // 如果是多個項目，批次處理
-    if (data.isMultipleItems && data.items) {
-      return await saveMultipleItems(data.items);
-    }
-    
-    // 單一項目處理
-    return await saveSingleItem(data);
-  } catch (error) {
-    console.error('Error in saveToNotion:', error);
-    throw error;
-  }
-}
-
-// 批次儲存多個項目
-async function saveMultipleItems(items) {
+// 批量保存多個記錄到Notion
+async function saveBatchToNotion(dataArray) {
   const results = [];
-  let newCount = 0;
-  let existingCount = 0;
   
-  for (const item of items) {
+  for (const data of dataArray) {
     try {
-      // 檢查URL是否已存在
-      if (item.url) {
-        const existing = await checkExistingUrl(item.url);
-        if (existing) {
-          console.log(`URL already exists: ${item.url}`);
+      // 如果有URL，先檢查是否已存在
+      if (data.url) {
+        const exists = await checkUrlExists(data.url);
+        if (exists) {
+          console.log(`URL already exists, skipping: ${data.url}`);
           results.push({
-            title: item.title,
-            url: existing.url,
-            status: 'existed'
+            success: false,
+            url: null,
+            message: `連結已存在：${data.url}`,
+            title: data.title
           });
-          existingCount++;
           continue;
         }
       }
       
-      // 儲存新項目
-      const pageUrl = await saveSingleItem(item);
+      // 儲存新記錄
+      const pageUrl = await saveToNotion(data);
       results.push({
-        title: item.title,
+        success: true,
         url: pageUrl,
-        status: 'created'
+        message: `已儲存：${data.title}`,
+        title: data.title
       });
-      newCount++;
-      
-      // 避免API限制，添加小延遲
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
     } catch (error) {
-      console.error(`Error saving item ${item.title}:`, error);
+      console.error(`Error saving record: ${data.title}`, error);
       results.push({
-        title: item.title,
+        success: false,
         url: null,
-        status: 'error',
-        error: error.message
+        message: `儲存失敗：${data.title}`,
+        title: data.title
       });
     }
   }
   
-  return {
-    summary: `處理完成！新增 ${newCount} 個項目，${existingCount} 個已存在`,
-    results: results,
-    newCount: newCount,
-    existingCount: existingCount
-  };
+  return results;
 }
 
-// 儲存單一項目
-async function saveSingleItem(data) {
+async function saveToNotion(data) {
   try {
     // 先獲取資料庫結構
     const database = await notion.databases.retrieve({ database_id: databaseId });
@@ -155,7 +127,7 @@ async function saveSingleItem(data) {
         rich_text: [
           {
             text: {
-              content: data.content,
+              content: data.content.length > 2000 ? data.content.substring(0, 2000) + '...' : data.content,
             },
           },
         ],
@@ -264,5 +236,6 @@ async function saveSingleItem(data) {
 
 module.exports = {
   saveToNotion,
-  checkExistingUrl,
+  saveBatchToNotion,
+  checkUrlExists,
 };
