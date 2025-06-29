@@ -55,8 +55,10 @@ async function fetchWebsiteContent(url) {
 
 // 解析包含多個連結的訊息
 async function parseMessage(message) {
-  // 先檢查是否包含多個連結
-  const urlMatches = message.match(/(https?:\/\/[^\s]+)/g);
+  // 修正URL正則表達式，支援更多格式
+  const urlMatches = message.match(/([a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g);
+  
+  console.log('Found URLs:', urlMatches);
   
   if (urlMatches && urlMatches.length > 1) {
     // 處理多個連結的情況
@@ -68,6 +70,16 @@ async function parseMessage(message) {
 }
 
 async function parseMultipleLinks(message, urls) {
+  // 確保所有URL都有協議前綴
+  const fullUrls = urls.map(url => {
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return 'https://' + url;
+    }
+    return url;
+  });
+  
+  console.log('Processing URLs:', fullUrls);
+  
   const prompt = `
 你是一個智能連結分析助手。請分析以下包含多個網站連結的文本，並為每個連結提取相關信息。
 
@@ -86,7 +98,7 @@ async function parseMultipleLinks(message, urls) {
 """${message}"""
 
 網站URL列表：
-${urls.map(url => `- ${url}`).join('\n')}
+${fullUrls.map(url => `- ${url}`).join('\n')}
 `;
 
   try {
@@ -94,14 +106,38 @@ ${urls.map(url => `- ${url}`).join('\n')}
     const response = await result.response;
     const text = response.text();
     
+    console.log('LLM Response:', text);
+    
     // 清理回應並解析JSON
     let jsonString = text.replace(/```json\n|```/g, '').trim();
-    const linkData = JSON.parse(jsonString);
+    let linkData = JSON.parse(jsonString);
+    
+    // 確保linkData是陣列
+    if (!Array.isArray(linkData)) {
+      linkData = [linkData];
+    }
+    
+    // 如果LLM沒有回傳所有URL，用備用方案補充
+    if (linkData.length < fullUrls.length) {
+      console.log('LLM did not return all URLs, using fallback for missing ones');
+      const processedUrls = new Set(linkData.map(item => item.url));
+      
+      for (const url of fullUrls) {
+        if (!processedUrls.has(url)) {
+          linkData.push({
+            url: url,
+            title: url.replace('https://', '').replace('http://', ''),
+            description: '待補充描述'
+          });
+        }
+      }
+    }
     
     // 為每個連結抓取實際網站內容
     const enrichedData = [];
     
     for (const link of linkData) {
+      console.log(`Fetching content for: ${link.url}`);
       const websiteContent = await fetchWebsiteContent(link.url);
       
       enrichedData.push({
@@ -114,13 +150,16 @@ ${urls.map(url => `- ${url}`).join('\n')}
       });
     }
     
+    console.log(`Created ${enrichedData.length} enriched data items`);
     return enrichedData;
   } catch (error) {
     console.error('Error parsing multiple links with LLM:', error);
     
     // 備用方案：直接使用URL創建基本結構
+    console.log('Using fallback method for all URLs');
     const fallbackData = [];
-    for (const url of urls) {
+    for (const url of fullUrls) {
+      console.log(`Fetching fallback content for: ${url}`);
       const websiteContent = await fetchWebsiteContent(url);
       
       fallbackData.push({
@@ -133,6 +172,7 @@ ${urls.map(url => `- ${url}`).join('\n')}
       });
     }
     
+    console.log(`Created ${fallbackData.length} fallback data items`);
     return fallbackData;
   }
 }
@@ -165,9 +205,13 @@ async function parseSingleMessage(message) {
     const parsedData = JSON.parse(jsonString);
     
     // 檢測URL
-    const urlMatch = message.match(/(https?:\/\/[^\s]+)/g);
+    const urlMatch = message.match(/([a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g);
     if (urlMatch && urlMatch.length > 0) {
-      parsedData.url = urlMatch[0];
+      let url = urlMatch[0];
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://' + url;
+      }
+      parsedData.url = url;
       parsedData.category = "Link";
       
       // 如果是單個連結，也抓取網站內容
@@ -181,12 +225,17 @@ async function parseSingleMessage(message) {
     console.error('Error parsing message with LLM:', error);
     
     // 檢測URL的備用方案
-    const urlMatch = message.match(/(https?:\/\/[^\s]+)/g);
+    const urlMatch = message.match(/([a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g);
     const isUrl = urlMatch && urlMatch.length > 0;
     
     let websiteContent = null;
+    let url = '';
     if (isUrl) {
-      websiteContent = await fetchWebsiteContent(urlMatch[0]);
+      url = urlMatch[0];
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://' + url;
+      }
+      websiteContent = await fetchWebsiteContent(url);
     }
     
     // Fallback to a default structure if LLM parsing fails
@@ -194,7 +243,7 @@ async function parseSingleMessage(message) {
       category: isUrl ? "Link" : "Other",
       title: websiteContent ? websiteContent.title : message.substring(0, 50) + (message.length > 50 ? "..." : ""),
       content: websiteContent ? websiteContent.description + '\n\n' + websiteContent.content : message,
-      url: isUrl ? urlMatch[0] : "",
+      url: isUrl ? url : "",
       apiKey: "",
       documentInfo: ""
     }];
