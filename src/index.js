@@ -364,6 +364,8 @@ async function handleEvent(event) {
           replyMessage += `❌ ${calResult.message}\n`;
           // 如果自動新增失敗，提供手動連結
           replyMessage += `🔗 手動新增Google日曆: ${event.googleCalendarUrl}\n`;
+          // 無論成功與否，都提供Apple Calendar的下載連結
+          replyMessage += `🍎 手動下載Apple日曆: ${event.appleCalendarUrl}\n`;
         }
       });
     }

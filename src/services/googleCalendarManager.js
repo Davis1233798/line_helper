@@ -1,17 +1,32 @@
 const { google } = require('googleapis');
 const path = require('path');
 
-// 服務帳號金鑰的路徑
-const KEYFILEPATH = path.join(__dirname, '../../google-credentials.json');
-
 // 要操作的日曆ID
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID;
 
 // 設定認證
-const auth = new google.auth.GoogleAuth({
-  keyFile: KEYFILEPATH,
-  scopes: ['https://www.googleapis.com/auth/calendar'],
-});
+let auth;
+if (process.env.GOOGLE_CREDENTIALS_JSON) {
+  // 生產環境：從環境變數讀取憑證
+  try {
+    const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+    auth = new google.auth.GoogleAuth({
+      credentials,
+      scopes: ['https://www.googleapis.com/auth/calendar'],
+    });
+  } catch (e) {
+    console.error('解析 GOOGLE_CREDENTIALS_JSON 環境變數失敗:', e);
+    // 可選：設定一個無效的auth，讓後續操作優雅地失敗
+    auth = null;
+  }
+} else {
+  // 開發環境：從本地檔案讀取憑證
+  const KEYFILEPATH = path.join(__dirname, '../../google-credentials.json');
+  auth = new google.auth.GoogleAuth({
+    keyFile: KEYFILEPATH,
+    scopes: ['https://www.googleapis.com/auth/calendar'],
+  });
+}
 
 const calendar = google.calendar({ version: 'v3', auth });
 
@@ -21,9 +36,9 @@ const calendar = google.calendar({ version: 'v3', auth });
  * @returns {Promise<object>} - 包含成功資訊和事件連結
  */
 async function addEventToCalendar(event) {
-  if (!CALENDAR_ID) {
-    console.warn('未設定 GOOGLE_CALENDAR_ID，跳過自動新增事件');
-    return { success: false, message: '未設定 GOOGLE_CALENDAR_ID' };
+  if (!auth || !CALENDAR_ID) {
+    console.warn('未設定 GOOGLE_CALENDAR_ID 或認證失敗，跳過自動新增事件');
+    return { success: false, message: '未設定 GOOGLE_CALENDAR_ID 或認證失敗' };
   }
   
   try {
