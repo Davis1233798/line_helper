@@ -841,7 +841,7 @@ async function parseSingleMessage(message) {
     const parsedData = JSON.parse(jsonString);
     
     // 檢測URL
-    const urlMatch = message.match(/([a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g);
+    const urlMatch = message.match(/https?:\/\/[^\s]+|(?:www\.)?[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*(?:\/[^\s]*)?/g);
     if (urlMatch && urlMatch.length > 0) {
       let url = urlMatch[0];
       if (!url.startsWith('http://') && !url.startsWith('https://')) {
@@ -866,7 +866,7 @@ async function parseSingleMessage(message) {
         // 使用備用分析
         const siteName = url.replace(/^https?:\/\//, '').split('/')[0];
         parsedData.title = parsedData.title || siteName;
-        parsedData.info = `${parsedData.title} 提供專業的線上服務，具備現代化的功能設計和使用者友善的操作介面，能夠滿足用戶的多樣化需求，提升工作效率和使用體驗。`;
+        parsedData.info = `${parsedData.title} 提供專業的線上服務，具備完整的功能套件和現代化的使用者介面，能夠有效提升工作效率和使用者體驗，適合各種專業應用場景。`;
       }
     }
     
@@ -875,7 +875,7 @@ async function parseSingleMessage(message) {
     console.error('Error parsing message with LLM:', error);
     
     // 檢測URL的備用方案
-    const urlMatch = message.match(/([a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g);
+    const urlMatch = message.match(/https?:\/\/[^\s]+|(?:www\.)?[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*(?:\/[^\s]*)?/g);
     const isUrl = urlMatch && urlMatch.length > 0;
     
     let analysis = null;
@@ -894,7 +894,7 @@ async function parseSingleMessage(message) {
         const siteName = url.replace(/^https?:\/\//, '').split('/')[0];
         analysis = {
           title: siteName,
-          info: `${siteName} 提供專業的數位服務解決方案，具備完整的功能架構和直觀的使用者介面，能夠有效滿足用戶需求並提升工作效率。`
+          info: `${siteName} 提供專業的數位服務解決方案，具備完整的功能架構和直觀的使用者介面，能夠滿足用戶需求並提升工作效率。`
         };
       }
     }
