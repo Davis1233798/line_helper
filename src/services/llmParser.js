@@ -41,77 +41,66 @@ const CATEGORY_TAGS = {
   "旅遊": ["旅遊規劃", "住宿預訂", "交通", "地圖"]
 };
 
-// 日期提取和行事曆功能
-function extractDateTimeInfo(websiteData) {
-  const content = `${websiteData.title} ${websiteData.description} ${websiteData.rawContent}`;
-  const potentialDates = new Set(); // 使用 Set 來避免重複的日期字串
-
-  // 匹配各種日期格式
-  const datePatterns = [
-    /\d{3}\/\d{1,2}\/\d{1,2}/g, // 民國年格式: 114/07/01
-    /\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}/g, // 西元年格式: 2025/07/01, 2025-07-01
-    /\d{1,2}月\d{1,2}日/g // 中文日期格式: 7月1日
-  ];
-
-  // 步驟1: 找出所有可能的日期字串
-  datePatterns.forEach(pattern => {
-    const matches = content.match(pattern) || [];
-    matches.forEach(dateStr => potentialDates.add(dateStr));
-  });
-
-  const events = [];
+// 【新】使用 LLM 提取日期和時間資訊
+async function extractDateTimeInfo(websiteData) {
+  const content = `${websiteData.title}\n${websiteData.description}\n${websiteData.rawContent.substring(0, 15000)}`;
   
-  // 步驟2: 處理找到的唯一日期
-  potentialDates.forEach(dateStr => {
-    let year, month, day;
+  const prompt = `
+    你是一個專門從文本中提取事件和日期的AI助理。請仔細閱讀以下網站內容，找出所有重要的日期和時間。
+    對於每一個找到的事件，請提供一個簡短的標題（例如：「報名截止」、「活動開始」）和一個精確的日期時間。
     
-    if (dateStr.includes('/')) {
-      const parts = dateStr.split('/');
-      if (parts[0].length === 3) { // 民國年
-        year = parseInt(parts[0]) + 1911;
-        month = parseInt(parts[1]);
-        day = parseInt(parts[2]);
-      } else { // 西元年
-        year = parseInt(parts[0]);
-        month = parseInt(parts[1]);
-        day = parseInt(parts[2]);
-      }
-    } else if (dateStr.includes('-')) { // 西元年
-      const parts = dateStr.split('-');
-      year = parseInt(parts[0]);
-      month = parseInt(parts[1]);
-      day = parseInt(parts[2]);
-    } else if (dateStr.includes('月')) { // 中文日期
-      const parts = dateStr.replace('日', '').split('月');
-      month = parseInt(parts[0]);
-      day = parseInt(parts[1]);
-      year = new Date().getFullYear(); // 假設為當年
+    規則：
+    1.  只回傳有效的、未來的日期。忽略過去的日期。
+    2.  如果年份不明確，請根據當前年份（${new Date().getFullYear()}）進行推斷。
+    3.  如果只提到日期但沒有時間，請將時間預設為當天的 23:59。
+    4.  將提取的日期和時間轉換為 "YYYY-MM-DDTHH:mm:ss" 的 ISO 8601 格式。
+    5.  最終結果必須是 JSON 格式的陣列，格式為：[{"title": "事件標題", "iso_datetime": "YYYY-MM-DDTHH:mm:ss", "description": "人類可讀的描述"}]。
+    6.  如果沒有找到任何有效日期，請回傳一個空陣列 []。
+
+    網站內容如下：
+    """
+    ${content}
+    """
+  `;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const response = result.response;
+    let jsonString = response.text().replace(/```json\n|```/g, '').trim();
+    
+    // 增加一個健全的 JSON 解析過程
+    if (!jsonString.startsWith('[')) {
+        jsonString = '[' + jsonString.substring(jsonString.indexOf('{'));
+    }
+    if (!jsonString.endsWith(']')) {
+        jsonString = jsonString.substring(0, jsonString.lastIndexOf('}') + 1) + ']';
     }
 
-    if (year && month && day) {
-      // 尋找日期周圍的上下文
-      const dateIndex = content.indexOf(dateStr);
-      const context = content.substring(Math.max(0, dateIndex - 30), dateIndex + dateStr.length + 30);
-      
-      const isDeadline = /報名.*?截止|截止.*?報名|報名.*?時間|活動.*?時間|日期/.test(context);
-      
-      if (isDeadline) {
-        // 提取對應的時間
-        const timeMatch = context.match(/(\d{1,2}):(\d{2})/);
-        const hour = timeMatch ? parseInt(timeMatch[1]) : 23;
-        const minute = timeMatch ? parseInt(timeMatch[2]) : 59;
-        
-        events.push({
-          type: 'deadline',
-          title: '報名截止',
-          date: new Date(year, month - 1, day, hour, minute),
-          description: `活動報名截止時間: ${year}年${month}月${day}日 ${hour}:${String(minute).padStart(2, '0')}`
-        });
+    const extractedEvents = JSON.parse(jsonString);
+    const events = [];
+
+    if (Array.isArray(extractedEvents)) {
+      for (const ev of extractedEvents) {
+        if (ev.title && ev.iso_datetime) {
+          const eventDate = new Date(ev.iso_datetime);
+          // 再次確認日期是有效的並且是未來的
+          if (!isNaN(eventDate.getTime()) && eventDate > new Date()) {
+            events.push({
+              type: 'deadline', // 保持類型一致
+              title: ev.title,
+              date: eventDate,
+              description: ev.description || `${ev.title}: ${eventDate.toLocaleString('zh-TW')}`
+            });
+          }
+        }
       }
     }
-  });
-  
-  return events;
+    return events;
+  } catch (error) {
+    console.error('使用 LLM 提取日期時發生錯誤:', error);
+    console.error('LLM 回傳的原始字串:', error.message.includes('JSON') ? jsonString : 'N/A');
+    return []; // 發生錯誤時回傳空陣列
+  }
 }
 
 // 生成 Google 行事曆連結
