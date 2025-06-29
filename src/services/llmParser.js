@@ -819,5 +819,6 @@ async function fuzzySearch(query, searchData) {
 module.exports = {
   parseMessage,
   fuzzySearch,
-  VALID_CATEGORIES
+  VALID_CATEGORIES,
+  CATEGORY_TAGS
 };

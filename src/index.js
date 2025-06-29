@@ -167,7 +167,14 @@ async function handleSearchQuery(event, userMessage) {
     let replyMessage = `🔍 找到 ${searchResult.count} 個結果：\n\n`;
     
     searchResult.results.forEach((item, index) => {
-      replyMessage += `${index + 1}. 【${item.category}】${item.title}\n`;
+      // 組合分類標籤顯示
+      let categoryDisplay = item.category;
+      if (item.category && item.category.includes(', ')) {
+        // 如果 category 本身就包含多個標籤（用逗號分隔）
+        categoryDisplay = item.category;
+      }
+      
+      replyMessage += `${index + 1}. 【${categoryDisplay}】${item.title}\n`;
       if (item.info) {
         replyMessage += `📝 ${item.info}\n`;
       }
@@ -183,7 +190,14 @@ async function handleSearchQuery(event, userMessage) {
       replyMessage = `🔍 找到 ${searchResult.count} 個結果，顯示前3個：\n\n`;
       
       truncatedResults.forEach((item, index) => {
-        replyMessage += `${index + 1}. 【${item.category}】${item.title}\n`;
+        // 組合分類標籤顯示
+        let categoryDisplay = item.category;
+        if (item.category && item.category.includes(', ')) {
+          // 如果 category 本身就包含多個標籤（用逗號分隔）
+          categoryDisplay = item.category;
+        }
+        
+        replyMessage += `${index + 1}. 【${categoryDisplay}】${item.title}\n`;
         if (item.info) {
           replyMessage += `📝 ${item.info.substring(0, 100)}${item.info.length > 100 ? '...' : ''}\n`;
         }
