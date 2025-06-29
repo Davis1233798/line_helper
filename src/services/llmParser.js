@@ -152,29 +152,169 @@ async function analyzeWebsiteFunction(url, title, description, rawContent) {
   }
 }
 
+// 批次分析多個網站功能 (8個一組)
+async function analyzeBatchWebsiteFunctions(websiteDataList) {
+  if (!websiteDataList || websiteDataList.length === 0) {
+    return [];
+  }
 
+  const prompt = `
+請分析以下網站列表，為每個網站提供繁體中文的詳細描述。請務必使用繁體中文回答。
 
-// 批量抓取並分析網站內容
+網站列表：
+${websiteDataList.map((data, index) => `
+${index + 1}. 網站URL：${data.url}
+   網站標題：${data.title}
+   網站描述：${data.description}
+   網站內容：${data.rawContent}
+`).join('\n')}
+
+請為每個網站提供：
+1. 工具名稱（繁體中文）
+2. 功能介紹（50-80字的繁體中文描述，說明這個工具的具體用途、主要功能和特色，內容要具體且實用）
+
+注意：
+- 功能介紹必須在50-80字之間
+- 要說明具體用途，不要只寫"AI工具"
+- 要包含主要功能特色
+- 使用繁體中文
+- 必須具體描述工具的實際功能，不能太籠統
+
+回傳 JSON 陣列格式，按照輸入順序：
+[
+  {"title": "工具名稱1", "info": "具體功能介紹（50-80字）"},
+  {"title": "工具名稱2", "info": "具體功能介紹（50-80字）"},
+  ...
+]
+`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+    
+    let jsonString = text.replace(/```json\n|```/g, '').trim();
+    let analysisResults = JSON.parse(jsonString);
+    
+    if (!Array.isArray(analysisResults)) {
+      analysisResults = [analysisResults];
+    }
+    
+    // 確保返回的數量與輸入相同，並處理每個結果
+    const processedResults = websiteDataList.map((data, index) => {
+      let analysis = analysisResults[index] || {
+        title: data.title,
+        info: ''
+      };
+      
+      // 確保 info 欄位長度適中且內容豐富
+      let info = analysis.info || '';
+      
+      // 如果回應太簡短或包含"AI工具"這種籠統描述，使用預設描述
+      if (info.length < 50 || info.includes('AI 工具') || info.includes('AI工具')) {
+        const siteName = data.url.replace('https://', '').replace('http://', '').split('/')[0];
+        
+        if (siteName.includes('ai') || siteName.includes('gpt')) {
+          info = '智能人工智慧平台，提供自然語言處理、文字生成、問答系統等功能，能協助使用者完成各種文字相關任務，提升創作與工作效率。';
+        } else if (siteName.includes('notion')) {
+          info = '全方位工作空間工具，整合筆記、文件、資料庫、任務管理等功能，支援團隊協作，提供靈活的頁面設計與強大的組織功能。';
+        } else {
+          info = `${siteName} 是一個專業的線上工具平台，提供多元化的功能服務，具備使用者友善的介面設計，能夠滿足不同使用者的需求，提升工作效率與生產力。`;
+        }
+      }
+      
+      // 確保長度在合理範圍內
+      if (info.length < 50) {
+        info = `${info}。此工具提供專業級的智能功能，能夠自動化處理複雜任務，提升工作效率。`;
+      }
+      
+      if (info.length > 80) {
+        info = info.substring(0, 77) + '...';
+      }
+      
+      return {
+        title: analysis.title || data.title,
+        info: info
+      };
+    });
+    
+    return processedResults;
+  } catch (error) {
+    console.error('批次分析網站功能失敗：', error);
+    
+    // 備用方案：為每個網站生成預設描述
+    return websiteDataList.map(data => {
+      const siteName = data.url.replace('https://', '').replace('http://', '').split('/')[0];
+      let defaultInfo = '';
+      
+      if (siteName.includes('ai') || siteName.includes('gpt')) {
+        defaultInfo = '智能人工智慧平台，提供自然語言處理、文字生成、問答系統等功能，能協助使用者完成各種文字相關任務，提升創作與工作效率。';
+      } else if (siteName.includes('notion')) {
+        defaultInfo = '全方位工作空間工具，整合筆記、文件、資料庫、任務管理等功能，支援團隊協作，提供靈活的頁面設計與強大的組織功能。';
+      } else {
+        defaultInfo = `${siteName} 是一個專業的線上工具平台，提供多元化的功能服務，具備使用者友善的介面設計，能夠滿足不同使用者的需求，提升工作效率與生產力。`;
+      }
+      
+      return {
+        title: data.title || siteName,
+        info: defaultInfo
+      };
+    });
+  }
+}
+
+// 批量抓取並分析網站內容 (改為8個一組批次處理)
 async function fetchMultipleWebsiteContents(urls) {
-  const promises = urls.slice(0, 10).map(async (url) => {
+  const BATCH_SIZE = 8; // 每批處理8個URL
+  const allResults = [];
+  
+  // 先並行抓取所有網站內容
+  const websitePromises = urls.slice(0, 20).map(async (url) => {
     try {
       const websiteData = await fetchWebsiteContent(url);
-      const analysis = await analyzeWebsiteFunction(
-        url, 
-        websiteData.title, 
-        websiteData.description, 
-        websiteData.rawContent
-      );
-      return analysis;
+      return {
+        url: url,
+        title: websiteData.title,
+        description: websiteData.description,
+        rawContent: websiteData.rawContent
+      };
     } catch (error) {
       return {
+        url: url,
         title: url.replace('https://', '').replace('http://', ''),
-        description: 'AI 工具，協助提升工作效率'
+        description: '',
+        rawContent: ''
       };
     }
   });
   
-  return await Promise.all(promises);
+  const websiteDataList = await Promise.all(websitePromises);
+  
+  // 將網站資料分組，每組8個
+  for (let i = 0; i < websiteDataList.length; i += BATCH_SIZE) {
+    const batch = websiteDataList.slice(i, i + BATCH_SIZE);
+    console.log(`處理第 ${Math.floor(i / BATCH_SIZE) + 1} 批，包含 ${batch.length} 個網站`);
+    
+    try {
+      // 批次分析這一組網站
+      const batchResults = await analyzeBatchWebsiteFunctions(batch);
+      allResults.push(...batchResults);
+    } catch (error) {
+      console.error(`第 ${Math.floor(i / BATCH_SIZE) + 1} 批分析失敗：`, error);
+      
+      // 如果批次分析失敗，為該批次提供預設結果
+      const fallbackResults = batch.map(data => {
+        const siteName = data.url.replace('https://', '').replace('http://', '').split('/')[0];
+        return {
+          title: data.title || siteName,
+          info: `${siteName} 是一個專業的線上工具平台，提供多元化的功能服務，具備使用者友善的介面設計，能夠滿足不同使用者的需求，提升工作效率與生產力。`
+        };
+      });
+      allResults.push(...fallbackResults);
+    }
+  }
+  
+  return allResults;
 }
 
 // 解析包含多個連結的訊息
@@ -247,7 +387,7 @@ async function parseMultipleLinks(message, urls) {
       }
     }
     
-    // 批量分析網站內容
+    // 批量分析網站內容 (使用新的8個一組批次處理)
     const websiteAnalysis = await fetchMultipleWebsiteContents(fullUrls);
     
     // 建立最終資料
@@ -278,7 +418,7 @@ async function parseMultipleLinks(message, urls) {
   } catch (error) {
     console.error('解析連結時發生錯誤：', error);
     
-    // 備用方案
+    // 備用方案 (使用新的8個一組批次處理)
     const websiteAnalysis = await fetchMultipleWebsiteContents(fullUrls);
     
     const fallbackData = fullUrls.map((url, index) => ({
@@ -294,7 +434,6 @@ async function parseMultipleLinks(message, urls) {
     return fallbackData;
   }
 }
-
 
 async function parseSingleMessage(message) {
   const prompt = `
@@ -333,17 +472,19 @@ async function parseSingleMessage(message) {
       parsedData.url = url;
       parsedData.category = "Link";
       
-      // 如果是單個連結，分析網站內容
+      // 如果是單個連結，使用批次分析 (只有1個)
       const websiteData = await fetchWebsiteContent(parsedData.url);
-      const analysis = await analyzeWebsiteFunction(
-        parsedData.url,
-        websiteData.title,
-        websiteData.description,
-        websiteData.rawContent
-      );
-      parsedData.title = analysis.title || parsedData.title;
-      // content保持原始訊息內容，info放功能介紹
-      parsedData.info = analysis.info;
+      const analysis = await analyzeBatchWebsiteFunctions([{
+        url: parsedData.url,
+        title: websiteData.title,
+        description: websiteData.description,
+        rawContent: websiteData.rawContent
+      }]);
+      
+      if (analysis && analysis.length > 0) {
+        parsedData.title = analysis[0].title || parsedData.title;
+        parsedData.info = analysis[0].info;
+      }
     }
     
     return [parsedData]; // 返回陣列格式保持一致性
@@ -362,12 +503,16 @@ async function parseSingleMessage(message) {
         url = 'https://' + url;
       }
       const websiteData = await fetchWebsiteContent(url);
-      analysis = await analyzeWebsiteFunction(
-        url,
-        websiteData.title,
-        websiteData.description,
-        websiteData.rawContent
-      );
+      const batchAnalysis = await analyzeBatchWebsiteFunctions([{
+        url: url,
+        title: websiteData.title,
+        description: websiteData.description,
+        rawContent: websiteData.rawContent
+      }]);
+      
+      if (batchAnalysis && batchAnalysis.length > 0) {
+        analysis = batchAnalysis[0];
+      }
     }
     
     // Fallback to a default structure if LLM parsing fails
@@ -382,7 +527,6 @@ async function parseSingleMessage(message) {
     }];
   }
 }
-
 
 module.exports = {
   parseMessage,
