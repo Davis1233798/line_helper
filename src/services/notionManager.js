@@ -158,6 +158,7 @@ async function saveToNotion(data) {
               {
                 text: {
                   content: data.info.length > 2000 ? data.info.substring(0, 2000) + '...' : data.info,
+                },
               },
             ],
           };
