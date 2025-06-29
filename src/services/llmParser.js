@@ -111,15 +111,15 @@ function generateGoogleCalendarLink(event) {
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 
-// 生成 Apple 行事曆連結 (ICS 格式)
-function generateAppleCalendarLink(event) {
+// 生成 Apple 行事曆連結 (ICS 格式)，透過外部服務產生可下載連結
+async function generateAppleCalendarLink(event) {
   const startDate = event.date;
   const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
-  
+
   const formatDate = (date) => {
     return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
   };
-  
+
   const icsContent = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -133,24 +133,44 @@ function generateAppleCalendarLink(event) {
     'END:VEVENT',
     'END:VCALENDAR'
   ].join('\r\n');
-  
-  return `data:text/calendar;charset=utf8,${encodeURIComponent(icsContent)}`;
+
+  try {
+    // 使用 hastebin 服務來託管 .ics 內容
+    const response = await axios.post('https://hastebin.com/documents', icsContent, {
+      headers: { 'Content-Type': 'text/plain' }
+    });
+    
+    // 組成可直接下載的 raw 連結
+    const key = response.data.key;
+    return `https://hastebin.com/raw/${key}`;
+  } catch (error) {
+    console.error('上傳 ICS 內容到 hastebin 失敗:', error.message);
+    // 備用方案：如果上傳失敗，仍然使用 data URI
+    return `data:text/calendar;charset=utf8,${encodeURIComponent(icsContent)}`;
+  }
 }
 
 // 生成行事曆資訊
-function generateCalendarInfo(events) {
+async function generateCalendarInfo(events) {
   if (!events || events.length === 0) {
     return null;
   }
   
-  return events.map(event => ({
-    type: event.type,
-    title: event.title,
-    date: event.date.toISOString(),
-    description: event.description,
-    googleCalendarUrl: generateGoogleCalendarLink(event),
-    appleCalendarUrl: generateAppleCalendarLink(event)
-  }));
+  const calendarInfoPromises = events.map(async (event) => {
+    const googleUrl = generateGoogleCalendarLink(event);
+    const appleUrl = await generateAppleCalendarLink(event);
+    
+    return {
+      type: event.type,
+      title: event.title,
+      date: event.date.toISOString(),
+      description: event.description,
+      googleCalendarUrl: googleUrl,
+      appleCalendarUrl: appleUrl
+    };
+  });
+  
+  return Promise.all(calendarInfoPromises);
 }
 
 // 改進的網站內容抓取函數
@@ -370,7 +390,7 @@ async function analyzeWebsiteFunction(url, websiteData) {
     
     // 提取行事曆資訊
     const events = extractDateTimeInfo(websiteData);
-    const calendarInfo = generateCalendarInfo(events);
+    const calendarInfo = await generateCalendarInfo(events);
     
     return {
       title: title,
@@ -406,7 +426,7 @@ async function analyzeWebsiteFunction(url, websiteData) {
     
     // 提取行事曆資訊
     const events = extractDateTimeInfo(websiteData);
-    const calendarInfo = generateCalendarInfo(events);
+    const calendarInfo = await generateCalendarInfo(events);
     
     return {
       title: title,
@@ -543,7 +563,7 @@ ${websiteInfoText}
       
       // 提取行事曆資訊
       const events = extractDateTimeInfo(data);
-      const calendarInfo = generateCalendarInfo(events);
+      const calendarInfo = await generateCalendarInfo(events);
       
       return {
         title: title,
@@ -559,7 +579,8 @@ ${websiteInfoText}
     console.error('批次分析網站功能失敗：', error);
     
     // 備用方案：為每個網站生成智能預設描述
-    return websiteDataList.map(data => {
+    const fallbackResults = [];
+    for (const data of websiteDataList) {
       const siteName = data.url.replace(/^https?:\/\//, '').split('/')[0];
       const title = data.title || siteName;
       const domainKeywords = siteName.toLowerCase();
@@ -581,13 +602,18 @@ ${websiteInfoText}
         defaultInfo = `${title} 提供專業的數位服務解決方案，具備完整的功能套件和現代化的使用者介面。支援多種應用場景和客製化需求，能夠有效提升工作效率和使用者體驗，適合各領域的專業人士使用。`;
       }
       
-      return {
+      const events = extractDateTimeInfo(data);
+      const calendarInfo = await generateCalendarInfo(events);
+      
+      fallbackResults.push({
         title: title,
         category: defaultCategory,
         tags: CATEGORY_TAGS[defaultCategory] ? CATEGORY_TAGS[defaultCategory].slice(0, 2) : [],
-        info: defaultInfo
-      };
-    });
+        info: defaultInfo,
+        calendarInfo: calendarInfo
+      });
+    }
+    return fallbackResults;
   }
 }
 
@@ -656,7 +682,7 @@ async function fetchMultipleWebsiteContents(urls) {
         
         // 提取行事曆資訊
         const events = extractDateTimeInfo(data);
-        const calendarInfo = generateCalendarInfo(events);
+        const calendarInfo = await generateCalendarInfo(events);
         
         return {
           title: title,
@@ -782,17 +808,30 @@ ${fullUrls.map((url, index) => `${index + 1}. ${url}`).join('\n')}
     // 備用方案
     const websiteAnalysis = await fetchMultipleWebsiteContents(fullUrls);
     
-    const fallbackData = fullUrls.map((url, index) => ({
-      category: websiteAnalysis[index]?.category || "其他",
-      tags: websiteAnalysis[index]?.tags || [],
-      title: websiteAnalysis[index]?.title || url.replace(/^https?:\/\//, '').split('/')[0],
-      content: '從用戶訊息中提取的連結',
-      info: websiteAnalysis[index]?.info || '這個工具提供專業的數位服務解決方案，具備先進的技術架構和使用者友善的介面設計，能夠滿足多樣化的應用需求，提升工作效率和使用體驗。',
-      url: url,
-      apiKey: "",
-      documentInfo: "",
-      calendarInfo: websiteAnalysis[index]?.calendarInfo || null
-    }));
+    const fallbackData = [];
+    for (let i = 0; i < fullUrls.length; i++) {
+      const url = fullUrls[i];
+      const analysis = websiteAnalysis[i];
+      
+      const events = extractDateTimeInfo({ 
+        title: analysis?.title || '',
+        description: analysis?.info || '',
+        rawContent: ''
+      });
+      const calendarInfo = await generateCalendarInfo(events);
+      
+      fallbackData.push({
+        category: analysis?.category || "其他",
+        tags: analysis?.tags || [],
+        title: analysis?.title || url.replace(/^https?:\/\//, '').split('/')[0],
+        content: '從用戶訊息中提取的連結',
+        info: analysis?.info || '這個工具提供專業的數位服務解決方案，具備先進的技術架構和使用者友善的介面設計，能夠滿足多樣化的應用需求，提升工作效率和使用體驗。',
+        url: url,
+        apiKey: "",
+        documentInfo: "",
+        calendarInfo: calendarInfo
+      });
+    }
     
     return fallbackData;
   }

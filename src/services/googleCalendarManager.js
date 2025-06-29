@@ -9,7 +9,9 @@ let auth;
 if (process.env.GOOGLE_CREDENTIALS_JSON) {
   // 生產環境：從環境變數讀取憑證
   try {
-    const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+    // 解決從環境變數讀取時，換行符被轉義成 \\n 的問題
+    const credentialsString = process.env.GOOGLE_CREDENTIALS_JSON.replace(/\\n/g, '\n');
+    const credentials = JSON.parse(credentialsString);
     auth = new google.auth.GoogleAuth({
       credentials,
       scopes: ['https://www.googleapis.com/auth/calendar'],
