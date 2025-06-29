@@ -76,7 +76,7 @@ async function saveToNotion(data) {
     const properties = {};
     
     // 尋找標題欄位 - 嘗試多種可能的名稱
-    const titleFieldNames = ['Name', 'Title', '標題', '名稱', 'name', 'title'];
+    const titleFieldNames = ['Name', 'Title', '標題', '名稱', 'name', 'title', 'ttitle'];
     let titleFieldName = null;
     
     for (const fieldName of titleFieldNames) {
@@ -122,6 +122,7 @@ async function saveToNotion(data) {
       }
     }
     
+    // Content欄位 - 保持原始訊息內容
     if (database.properties['Content'] && data.content) {
       properties['Content'] = {
         rich_text: [
@@ -132,6 +133,37 @@ async function saveToNotion(data) {
           },
         ],
       };
+    }
+    
+    // Info欄位 - 功能介紹
+    if (database.properties['Info'] && data.info) {
+      properties['Info'] = {
+        rich_text: [
+          {
+            text: {
+              content: data.info.length > 2000 ? data.info.substring(0, 2000) + '...' : data.info,
+            },
+          },
+        ],
+      };
+    }
+    
+    // 如果沒有Info欄位，檢查其他可能的欄位名稱
+    if (!database.properties['Info'] && data.info) {
+      const infoFieldNames = ['功能介紹', 'Description', 'DESCRIPTION', '描述', 'info'];
+      for (const fieldName of infoFieldNames) {
+        if (database.properties[fieldName]) {
+          properties[fieldName] = {
+            rich_text: [
+              {
+                text: {
+                  content: data.info.length > 2000 ? data.info.substring(0, 2000) + '...' : data.info,
+              },
+            ],
+          };
+          break;
+        }
+      }
     }
     
     if (database.properties['URL'] && data.url) {
@@ -165,9 +197,35 @@ async function saveToNotion(data) {
       };
     }
     
+    // API KEY欄位（大寫版本）
+    if (database.properties['API KEY'] && data.apiKey) {
+      properties['API KEY'] = {
+        rich_text: [
+          {
+            text: {
+              content: data.apiKey,
+            },
+          },
+        ],
+      };
+    }
+    
     // Document Info欄位
     if (database.properties['Document Info'] && data.documentInfo) {
       properties['Document Info'] = {
+        rich_text: [
+          {
+            text: {
+              content: data.documentInfo,
+            },
+          },
+        ],
+      };
+    }
+    
+    // DOCUMENT INFO欄位（大寫版本）
+    if (database.properties['DOCUMENT INFO'] && data.documentInfo) {
+      properties['DOCUMENT INFO'] = {
         rich_text: [
           {
             text: {

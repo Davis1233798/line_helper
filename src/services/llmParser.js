@@ -68,12 +68,19 @@ async function analyzeWebsiteFunction(url, title, description, rawContent) {
 
 請提供：
 1. 工具名稱（繁體中文）
-2. 主要功能（50-100字的繁體中文描述，說明這個工具的具體用途和特色）
+2. 功能介紹（80-150字的繁體中文描述，說明這個工具的具體用途、主要功能和特色，內容要具體且實用）
+
+注意：
+- 功能介紹必須在80-150字之間
+- 要說明具體用途，不要只寫"AI工具"
+- 要包含主要功能特色
+- 使用繁體中文
+- 必須具體描述工具的實際功能，不能太籠統
 
 回傳格式：
 {
   "title": "工具名稱",
-  "function": "詳細功能描述"
+  "info": "具體功能介紹（80-150字）"
 }
 `;
 
@@ -85,18 +92,67 @@ async function analyzeWebsiteFunction(url, title, description, rawContent) {
     let jsonString = text.replace(/```json\n|```/g, '').trim();
     const analysis = JSON.parse(jsonString);
     
+    // 確保 info 欄位長度適中且內容豐富
+    let info = analysis.info || analysis.function || '';
+    
+    // 如果回應太簡短或包含"AI工具"這種籠統描述，重新生成
+    if (info.length < 80 || info.includes('AI 工具') || info.includes('AI工具')) {
+      const detailedPrompt = `
+網站：${url}
+標題：${title}
+
+請詳細分析這個網站的具體功能，以繁體中文提供80-150字的詳細描述。請包含：
+1. 工具的具體用途
+2. 主要功能特色
+3. 適用場景
+4. 使用者群體
+
+不要使用籠統的詞語如"AI工具"，要具體說明功能。
+
+只回傳功能描述文字，不要JSON格式：
+`;
+      
+      const detailedResult = await model.generateContent(detailedPrompt);
+      const detailedResponse = await detailedResult.response;
+      info = detailedResponse.text().trim();
+    }
+    
+    // 確保長度在合理範圍內
+    if (info.length < 80) {
+      info = `${info}。此工具提供專業級的智能功能，能夠自動化處理複雜任務，提升工作效率，並具備直觀的使用者介面，適合各種專業應用場景。`;
+    }
+    
+    if (info.length > 150) {
+      info = info.substring(0, 147) + '...';
+    }
+    
     return {
       title: analysis.title || title,
-      description: analysis.function || 'AI 工具'
+      info: info
     };
   } catch (error) {
     console.error(`分析網站功能失敗：${url}`, error);
+    
+    // 根據URL生成預設描述
+    const siteName = url.replace('https://', '').replace('http://', '').split('/')[0];
+    let defaultInfo = '';
+    
+    if (siteName.includes('ai') || siteName.includes('gpt')) {
+      defaultInfo = '智能人工智慧平台，提供自然語言處理、文字生成、問答系統等功能，能協助使用者完成各種文字相關任務，提升創作與工作效率。';
+    } else if (siteName.includes('notion')) {
+      defaultInfo = '全方位工作空間工具，整合筆記、文件、資料庫、任務管理等功能，支援團隊協作，提供靈活的頁面設計與強大的組織功能。';
+    } else {
+      defaultInfo = `${siteName} 是一個專業的線上工具平台，提供多元化的功能服務，具備使用者友善的介面設計，能夠滿足不同使用者的需求，提升工作效率與生產力。`;
+    }
+    
     return {
-      title: title,
-      description: 'AI 工具，協助提升工作效率'
+      title: title || siteName,
+      info: defaultInfo
     };
   }
 }
+
+
 
 // 批量抓取並分析網站內容
 async function fetchMultipleWebsiteContents(urls) {
@@ -203,13 +259,14 @@ async function parseMultipleLinks(message, urls) {
       
       const websiteData = websiteAnalysis[index] || {
         title: linkInfo.title,
-        description: linkInfo.description
+        info: linkInfo.description
       };
       
       return {
         category: "Link",
         title: websiteData.title || linkInfo.title,
-        content: websiteData.description || linkInfo.description,
+        content: linkInfo.description, // 保持原始從訊息中提取的內容
+        info: websiteData.info || '這個工具提供專業的線上服務，具備多項實用功能，能夠協助使用者提升工作效率與生產力，適合各種應用場景。', // 網站分析的功能介紹
         url: url,
         apiKey: "",
         documentInfo: ""
@@ -227,7 +284,8 @@ async function parseMultipleLinks(message, urls) {
     const fallbackData = fullUrls.map((url, index) => ({
       category: "Link",
       title: websiteAnalysis[index]?.title || url.replace('https://', '').split('/')[0],
-      content: websiteAnalysis[index]?.description || 'AI 工具，協助提升工作效率',
+      content: '從用戶訊息中提取的連結', // 原始內容
+      info: websiteAnalysis[index]?.info || '這個工具提供專業的線上服務，具備多項實用功能，能夠協助使用者提升工作效率與生產力，適合各種應用場景。', // 功能介紹
       url: url,
       apiKey: "",
       documentInfo: ""
@@ -236,6 +294,7 @@ async function parseMultipleLinks(message, urls) {
     return fallbackData;
   }
 }
+
 
 async function parseSingleMessage(message) {
   const prompt = `
@@ -283,7 +342,8 @@ async function parseSingleMessage(message) {
         websiteData.rawContent
       );
       parsedData.title = analysis.title || parsedData.title;
-      parsedData.content = analysis.description;
+      // content保持原始訊息內容，info放功能介紹
+      parsedData.info = analysis.info;
     }
     
     return [parsedData]; // 返回陣列格式保持一致性
@@ -314,13 +374,15 @@ async function parseSingleMessage(message) {
     return [{
       category: isUrl ? "Link" : "Other",
       title: analysis ? analysis.title : message.substring(0, 50) + (message.length > 50 ? "..." : ""),
-      content: analysis ? analysis.description : message,
+      content: message, // 保持原始訊息內容
+      info: analysis ? analysis.info : '', // 功能介紹
       url: isUrl ? url : "",
       apiKey: "",
       documentInfo: ""
     }];
   }
 }
+
 
 module.exports = {
   parseMessage,
