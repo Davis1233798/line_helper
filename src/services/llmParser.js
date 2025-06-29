@@ -27,6 +27,132 @@ const CATEGORY_TAGS = {
   "旅遊": ["旅遊規劃", "住宿預訂", "交通服務", "旅遊資訊", "地圖導航"]
 };
 
+// 日期提取和行事曆功能
+function extractDateTimeInfo(websiteData) {
+  const content = `${websiteData.title} ${websiteData.description} ${websiteData.rawContent}`;
+  
+  // 匹配各種日期格式
+  const datePatterns = [
+    // 民國年格式: 114/07/01, 114/07/11
+    /(\d{3})\/(\d{1,2})\/(\d{1,2})/g,
+    // 西元年格式: 2025/07/01, 2025-07-01
+    /(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/g,
+    // 中文日期格式: 7月1日, 七月一日
+    /(\d{1,2}|\u4e00|\u4e8c|\u4e09|\u56db|\u4e94|\u516d|\u4e03|\u516b|\u4e5d|\u5341)[\u6708](\d{1,2}|\u4e00|\u4e8c|\u4e09|\u56db|\u4e94|\u516d|\u4e03|\u516b|\u4e5d|\u5341)[\u65e5]/g
+  ];
+  
+  const events = [];
+  let match;
+  
+  // 提取日期
+  for (const pattern of datePatterns) {
+    while ((match = pattern.exec(content)) !== null) {
+      let year, month, day;
+      
+      if (match[1].length === 3) {
+        // 民國年轉西元年
+        year = parseInt(match[1]) + 1911;
+        month = parseInt(match[2]);
+        day = parseInt(match[3]);
+      } else if (match[1].length === 4) {
+        // 西元年
+        year = parseInt(match[1]);
+        month = parseInt(match[2]);
+        day = parseInt(match[3]);
+      }
+      
+      if (year && month && day) {
+        // 檢查是否為報名截止日期
+        const contextBefore = content.substring(Math.max(0, match.index - 20), match.index);
+        const contextAfter = content.substring(match.index + match[0].length, match.index + match[0].length + 20);
+        const context = contextBefore + match[0] + contextAfter;
+        
+        const isDeadline = /報名.*?截止|截止.*?報名|報名.*?時間|活動.*?時間/.test(context);
+        
+        if (isDeadline) {
+          // 提取對應的時間
+          const timeMatch = content.substring(match.index, match.index + 100).match(/(\d{1,2}):(\d{2})/);
+          const hour = timeMatch ? parseInt(timeMatch[1]) : 23;
+          const minute = timeMatch ? parseInt(timeMatch[2]) : 59;
+          
+          events.push({
+            type: 'deadline',
+            title: '報名截止',
+            date: new Date(year, month - 1, day, hour, minute),
+            description: `活動報名截止時間: ${year}年${month}月${day}日 ${hour}:${String(minute).padStart(2, '0')}`
+          });
+        }
+      }
+    }
+  }
+  
+  return events;
+}
+
+// 生成 Google 行事曆連結
+function generateGoogleCalendarLink(event) {
+  const startDate = event.date;
+  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000); // 預設1小時
+  
+  const formatDate = (date) => {
+    return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  };
+  
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: event.title,
+    dates: `${formatDate(startDate)}/${formatDate(endDate)}`,
+    details: event.description,
+    location: '',
+    sf: 'true',
+    output: 'xml'
+  });
+  
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+// 生成 Apple 行事曆連結 (ICS 格式)
+function generateAppleCalendarLink(event) {
+  const startDate = event.date;
+  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+  
+  const formatDate = (date) => {
+    return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  };
+  
+  const icsContent = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Line Notion Bot//Event//EN',
+    'BEGIN:VEVENT',
+    `DTSTART:${formatDate(startDate)}`,
+    `DTEND:${formatDate(endDate)}`,
+    `SUMMARY:${event.title}`,
+    `DESCRIPTION:${event.description}`,
+    `UID:${Date.now()}@linenotionbot.com`,
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ].join('\r\n');
+  
+  return `data:text/calendar;charset=utf8,${encodeURIComponent(icsContent)}`;
+}
+
+// 生成行事曆資訊
+function generateCalendarInfo(events) {
+  if (!events || events.length === 0) {
+    return null;
+  }
+  
+  return events.map(event => ({
+    type: event.type,
+    title: event.title,
+    date: event.date.toISOString(),
+    description: event.description,
+    googleCalendarUrl: generateGoogleCalendarLink(event),
+    appleCalendarUrl: generateAppleCalendarLink(event)
+  }));
+}
+
 // 改進的網站內容抓取函數
 async function fetchWebsiteContent(url) {
   try {
@@ -242,11 +368,16 @@ async function analyzeWebsiteFunction(url, websiteData) {
       }
     }
     
+    // 提取行事曆資訊
+    const events = extractDateTimeInfo(websiteData);
+    const calendarInfo = generateCalendarInfo(events);
+    
     return {
       title: title,
       category: category,
       tags: tags,
-      info: info
+      info: info,
+      calendarInfo: calendarInfo
     };
   } catch (error) {
     console.error(`深度分析網站功能失敗：${url}`, error);
@@ -273,10 +404,15 @@ async function analyzeWebsiteFunction(url, websiteData) {
       fallbackInfo = `${title} 提供專業的線上服務，具備完整的功能套件和使用者友善的介面設計，能夠滿足用戶的多樣化需求，適用於提升工作效率和解決實際問題的各種場景。`;
     }
     
+    // 提取行事曆資訊
+    const events = extractDateTimeInfo(websiteData);
+    const calendarInfo = generateCalendarInfo(events);
+    
     return {
       title: title,
       category: fallbackCategory,
-      info: fallbackInfo
+      info: fallbackInfo,
+      calendarInfo: calendarInfo
     };
   }
 }
@@ -405,11 +541,16 @@ ${websiteInfoText}
         }
       }
       
+      // 提取行事曆資訊
+      const events = extractDateTimeInfo(data);
+      const calendarInfo = generateCalendarInfo(events);
+      
       return {
         title: title,
         category: category,
         tags: tags,
-        info: info
+        info: info,
+        calendarInfo: calendarInfo
       };
     });
     
@@ -513,10 +654,15 @@ async function fetchMultipleWebsiteContents(urls) {
           fallbackInfo = `${title} 提供專業的數位解決方案，具備完整的功能模組和現代化的使用者介面。支援多種應用需求和客製化設定，能夠有效提升工作效率和使用體驗，適合各領域專業人士使用。`;
         }
         
+        // 提取行事曆資訊
+        const events = extractDateTimeInfo(data);
+        const calendarInfo = generateCalendarInfo(events);
+        
         return {
           title: title,
           category: fallbackCategory,
-          info: fallbackInfo
+          info: fallbackInfo,
+          calendarInfo: calendarInfo
         };
       });
       allResults.push(...fallbackResults);
@@ -528,8 +674,8 @@ async function fetchMultipleWebsiteContents(urls) {
 
 // 解析包含多個連結的訊息
 async function parseMessage(message) {
-  // 修正URL正則表達式，支援更多格式
-  const urlMatches = message.match(/([a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g);
+  // 改進的URL正則表達式，支援完整的URL格式包含查詢參數
+  const urlMatches = message.match(/https?:\/\/[^\s]+|(?:www\.)?[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*(?:\/[^\s]*)?/g);
   
   console.log('Found URLs:', urlMatches);
   
@@ -623,7 +769,8 @@ ${fullUrls.map((url, index) => `${index + 1}. ${url}`).join('\n')}
         info: websiteData.info || '這個工具提供專業的線上服務，具備完整的功能套件和現代化的使用者介面，能夠有效提升工作效率和使用者體驗，適合各種專業應用場景。',
         url: url,
         apiKey: "",
-        documentInfo: ""
+        documentInfo: "",
+        calendarInfo: websiteData.calendarInfo || null
       };
     });
     
@@ -643,7 +790,8 @@ ${fullUrls.map((url, index) => `${index + 1}. ${url}`).join('\n')}
       info: websiteAnalysis[index]?.info || '這個工具提供專業的數位服務解決方案，具備先進的技術架構和使用者友善的介面設計，能夠滿足多樣化的應用需求，提升工作效率和使用體驗。',
       url: url,
       apiKey: "",
-      documentInfo: ""
+      documentInfo: "",
+      calendarInfo: websiteAnalysis[index]?.calendarInfo || null
     }));
     
     return fallbackData;
@@ -711,6 +859,7 @@ async function parseSingleMessage(message) {
           parsedData.title = analysis.title || parsedData.title;
           parsedData.category = analysis.category || parsedData.category;
           parsedData.info = analysis.info;
+          parsedData.calendarInfo = analysis.calendarInfo;
         }
       } catch (analysisError) {
         console.error('Single link analysis failed:', analysisError);
@@ -759,7 +908,8 @@ async function parseSingleMessage(message) {
       info: analysis ? analysis.info : '', // 網站功能介紹
       url: isUrl ? url : "",
       apiKey: "",
-      documentInfo: ""
+      documentInfo: "",
+      calendarInfo: analysis ? analysis.calendarInfo : null
     }];
   }
 }
@@ -820,5 +970,9 @@ module.exports = {
   parseMessage,
   fuzzySearch,
   VALID_CATEGORIES,
-  CATEGORY_TAGS
+  CATEGORY_TAGS,
+  extractDateTimeInfo,
+  generateCalendarInfo,
+  generateGoogleCalendarLink,
+  generateAppleCalendarLink
 };
