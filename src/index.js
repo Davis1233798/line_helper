@@ -4,6 +4,9 @@ const line = require('@line/bot-sdk');
 const llmParser = require('./services/llmParser');
 const notionManager = require('./services/notionManager');
 const googleCalendarManager = require('./services/googleCalendarManager');
+const http = require('http'); // 用於健康檢查
+const { exec } = require('child_process'); // 用於網路偵測
+const os = require('os');
 
 // 檢查必要的環境變數
 const requiredEnvVars = [
@@ -130,6 +133,7 @@ app.post('/webhook-raw', express.raw({type: 'application/json'}), (req, res) => 
     console.error('Raw webhook error:', error);
   }
 });
+
 // 處理搜尋查詢
 async function handleSearchQuery(event, userMessage) {
   try {
@@ -394,6 +398,30 @@ async function handleEvent(event) {
   }
 }
 
+// 網路連線偵測
+function checkInternetConnection() {
+  const pingCommand = os.platform() === 'win32' ? 'ping -n 1 google.com' : 'ping -c 1 google.com';
+  
+  exec(pingCommand, (error, stdout, stderr) => {
+    if (error) {
+      console.error(`網路偵測失敗 (ping): ${error.message}`);
+      // 在ping失敗時嘗試curl，因為某些環境可能禁用ICMP但允許HTTP
+      exec('curl -s --head https://www.google.com', (curlError, curlStdout, curlStderr) => {
+        if (curlError) {
+          console.error(`網路偵測失敗 (curl): ${curlError.message}`);
+          console.warn('警告: 伺服器可能無法連線到外部網路，這會影響Google Calendar API和Apple日曆連結生成。');
+        } else if (curlStdout && (curlStdout.includes('200 OK') || curlStdout.includes('301 Moved Permanently'))) {
+          console.log('網路偵測成功 (curl)，連線正常。');
+        } else {
+          console.warn('警告: 網路偵測 (curl) 結果異常，外部連線可能受限。');
+        }
+      });
+      return;
+    }
+    console.log('網路偵測成功 (ping)，連線正常。');
+  });
+}
+
 const port = process.env.PORT || 3000;
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server is running on port ${port}`);
@@ -405,4 +433,8 @@ app.listen(port, '0.0.0.0', () => {
     hasNotionToken: !!process.env.NOTION_API_TOKEN,
     hasNotionDb: !!process.env.NOTION_DATABASE_ID
   });
+  notionManager.getNotionData(); // 啟動時獲取 Notion 資料庫數據
+  checkInternetConnection(); // 啟動時檢查網路連線
 });
+
+module.exports = app;
