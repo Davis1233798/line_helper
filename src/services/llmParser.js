@@ -5,11 +5,27 @@ const cheerio = require('cheerio');
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// 定義標準分類
+// 定義標準分類和子標籤
 const VALID_CATEGORIES = [
   "其他", "運動與健身", "飲食", "娛樂", "旅遊", "創造力", 
   "生產力工具", "資訊與閱讀", "遊戲", "購物", "教育", "財經", "社交"
 ];
+
+// 定義細緻的子分類標籤
+const CATEGORY_TAGS = {
+  "生產力工具": ["會議", "會議記錄", "筆記", "專案管理", "時間管理", "待辦事項", "文檔", "協作", "自動化", "AI助手", "代碼編輯", "雲端服務"],
+  "創造力": ["設計", "影片編輯", "音樂製作", "繪圖", "3D建模", "圖像生成", "創作平台", "素材庫", "模板"],
+  "資訊與閱讀": ["新聞", "部落格", "學習資源", "資料庫", "搜尋", "百科", "研究", "知識管理"],
+  "教育": ["線上課程", "語言學習", "技能培訓", "考試準備", "教學工具", "學習平台"],
+  "娛樂": ["影音平台", "串流服務", "音樂平台", "娛樂內容", "播客"],
+  "遊戲": ["遊戲平台", "遊戲工具", "遊戲開發", "電競", "模擬器"],
+  "社交": ["社群媒體", "通訊軟體", "論壇", "交友平台", "即時通訊"],
+  "購物": ["電商平台", "比價服務", "商品搜尋", "優惠券", "購物助手"],
+  "財經": ["投資平台", "理財工具", "加密貨幣", "股票交易", "金融分析", "記帳"],
+  "運動與健身": ["健身應用", "運動追蹤", "健康管理", "體能訓練", "營養"],
+  "飲食": ["美食應用", "食譜", "餐廳服務", "營養管理", "料理學習", "外送"],
+  "旅遊": ["旅遊規劃", "住宿預訂", "交通服務", "旅遊資訊", "地圖導航"]
+};
 
 // 改進的網站內容抓取函數
 async function fetchWebsiteContent(url) {
@@ -157,9 +173,15 @@ async function analyzeWebsiteFunction(url, websiteData) {
 請嚴格按照JSON格式回傳：
 {
   "title": "具體的工具或服務名稱",
-  "category": "分類類別（必須從上述13個類別中選擇）",
+  "category": "主要分類類別（必須從上述13個類別中選擇）",
+  "tags": ["相關的子標籤1", "相關的子標籤2"],
   "info": "嚴格60-100字的詳細功能描述，包含具體用途、特色和適用場景"
 }
+
+注意：
+- category 必須是主要分類
+- tags 應該包含2-4個相關的細分標籤，讓分類更精確
+- 例如：category: "生產力工具", tags: ["會議", "會議記錄", "協作"]
 
 請確保描述內容具體、實用且基於實際網站資訊，且字數嚴格控制在60-100字範圍內。
 `;
@@ -176,10 +198,28 @@ async function analyzeWebsiteFunction(url, websiteData) {
     let info = analysis.info || analysis.function || '';
     let title = analysis.title || websiteData.title || '';
     let category = analysis.category || '其他';
+    let tags = analysis.tags || [];
     
     // 驗證分類是否有效
     if (!VALID_CATEGORIES.includes(category)) {
       category = '其他';
+    }
+    
+    // 處理和驗證標籤
+    if (!Array.isArray(tags) || tags.length === 0) {
+      // 如果沒有標籤，根據分類提供預設標籤
+      if (CATEGORY_TAGS[category]) {
+        tags = CATEGORY_TAGS[category].slice(0, 2); // 預設取前兩個標籤
+      }
+    }
+    
+    // 確保標籤數量合理 (2-4個)
+    if (tags.length > 4) {
+      tags = tags.slice(0, 4);
+    } else if (tags.length < 2 && CATEGORY_TAGS[category]) {
+      // 補足標籤
+      const additionalTags = CATEGORY_TAGS[category].filter(tag => !tags.includes(tag));
+      tags = [...tags, ...additionalTags].slice(0, 3);
     }
     
     // 如果描述太短，生成備用描述
@@ -205,6 +245,7 @@ async function analyzeWebsiteFunction(url, websiteData) {
     return {
       title: title,
       category: category,
+      tags: tags,
       info: info
     };
   } catch (error) {
@@ -288,9 +329,11 @@ ${websiteInfoText}
 # 回傳格式
 請嚴格按照JSON陣列格式回傳，按照輸入順序：
 [
-  {"title": "網站1的具體工具名稱", "category": "分類類別", "info": "嚴格60-100字的詳細功能描述"},
-  {"title": "網站2的具體工具名稱", "category": "分類類別", "info": "嚴格60-100字的詳細功能描述"}
+  {"title": "網站1的具體工具名稱", "category": "主要分類", "tags": ["子標籤1", "子標籤2"], "info": "嚴格60-100字的詳細功能描述"},
+  {"title": "網站2的具體工具名稱", "category": "主要分類", "tags": ["子標籤1", "子標籤2"], "info": "嚴格60-100字的詳細功能描述"}
 ]
+
+注意：每個網站都要包含 tags 陣列，提供2-4個相關的細分標籤
 
 請確保每個描述都具體、實用且基於實際網站資訊，且字數嚴格控制在60-100字範圍內。
 `;
@@ -319,10 +362,27 @@ ${websiteInfoText}
       let info = analysis.info || '';
       let title = analysis.title || data.title || '';
       let category = analysis.category || '其他';
+      let tags = analysis.tags || [];
       
       // 驗證分類是否有效
       if (!VALID_CATEGORIES.includes(category)) {
         category = '其他';
+      }
+      
+      // 處理和驗證標籤
+      if (!Array.isArray(tags) || tags.length === 0) {
+        // 如果沒有標籤，根據分類提供預設標籤
+        if (CATEGORY_TAGS[category]) {
+          tags = CATEGORY_TAGS[category].slice(0, 2);
+        }
+      }
+      
+      // 確保標籤數量合理 (2-4個)
+      if (tags.length > 4) {
+        tags = tags.slice(0, 4);
+      } else if (tags.length < 2 && CATEGORY_TAGS[category]) {
+        const additionalTags = CATEGORY_TAGS[category].filter(tag => !tags.includes(tag));
+        tags = [...tags, ...additionalTags].slice(0, 3);
       }
       
       // 如果回應太簡短，使用智能預設描述
@@ -348,6 +408,7 @@ ${websiteInfoText}
       return {
         title: title,
         category: category,
+        tags: tags,
         info: info
       };
     });
@@ -382,6 +443,7 @@ ${websiteInfoText}
       return {
         title: title,
         category: defaultCategory,
+        tags: CATEGORY_TAGS[defaultCategory] ? CATEGORY_TAGS[defaultCategory].slice(0, 2) : [],
         info: defaultInfo
       };
     });
@@ -555,6 +617,7 @@ ${fullUrls.map((url, index) => `${index + 1}. ${url}`).join('\n')}
       
       return {
         category: websiteData.category || "其他",
+        tags: websiteData.tags || [],
         title: websiteData.title || linkInfo.title,
         content: linkInfo.description, 
         info: websiteData.info || '這個工具提供專業的線上服務，具備完整的功能套件和現代化的使用者介面，能夠有效提升工作效率和使用者體驗，適合各種專業應用場景。',
@@ -574,6 +637,7 @@ ${fullUrls.map((url, index) => `${index + 1}. ${url}`).join('\n')}
     
     const fallbackData = fullUrls.map((url, index) => ({
       category: websiteAnalysis[index]?.category || "其他",
+      tags: websiteAnalysis[index]?.tags || [],
       title: websiteAnalysis[index]?.title || url.replace(/^https?:\/\//, '').split('/')[0],
       content: '從用戶訊息中提取的連結',
       info: websiteAnalysis[index]?.info || '這個工具提供專業的數位服務解決方案，具備先進的技術架構和使用者友善的介面設計，能夠滿足多樣化的應用需求，提升工作效率和使用體驗。',
@@ -689,6 +753,7 @@ async function parseSingleMessage(message) {
     // Fallback to a default structure if LLM parsing fails
     return [{
       category: analysis ? analysis.category || "其他" : (isUrl ? "其他" : "其他"),
+      tags: analysis ? analysis.tags || [] : [],
       title: analysis ? analysis.title : message.substring(0, 50) + (message.length > 50 ? "..." : ""),
       content: message, // 保持原始訊息內容
       info: analysis ? analysis.info : '', // 網站功能介紹

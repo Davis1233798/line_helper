@@ -111,11 +111,27 @@ async function saveToNotion(data) {
     
     // 設置其他欄位 - 只有在資料庫中存在時才添加
     if (database.properties['Category']) {
-      if (database.properties['Category'].type === 'multi_select' && data.category) {
-        properties['Category'] = {
-          multi_select: [{ name: data.category }]
-        };
+      if (database.properties['Category'].type === 'multi_select') {
+        // 對於 multi_select，結合主分類和標籤
+        const categoryTags = [];
+        if (data.category) {
+          categoryTags.push({ name: data.category });
+        }
+        if (data.tags && Array.isArray(data.tags)) {
+          data.tags.forEach(tag => {
+            if (tag && tag.trim()) {
+              categoryTags.push({ name: tag.trim() });
+            }
+          });
+        }
+        
+        if (categoryTags.length > 0) {
+          properties['Category'] = {
+            multi_select: categoryTags
+          };
+        }
       } else if (database.properties['Category'].type === 'select' && data.category) {
+        // 對於 select，只使用主分類
         properties['Category'] = {
           select: { name: data.category }
         };
@@ -296,153 +312,135 @@ async function saveToNotion(data) {
 // 搜尋 Notion 資料庫
 async function searchNotion(keyword, category = null) {
   try {
+    // 先獲取資料庫結構，就像 saveToNotion 一樣
+    const database = await notion.databases.retrieve({ database_id: databaseId });
+    console.log('Database properties for search:', Object.keys(database.properties));
+    
+    // 動態找到標題欄位
+    const titleFieldNames = ['Name', 'Title', '標題', '名稱', 'name', 'title', 'ttitle'];
+    const actualTitleFields = [];
+    
+    for (const fieldName of titleFieldNames) {
+      if (database.properties[fieldName] && database.properties[fieldName].type === 'title') {
+        actualTitleFields.push(fieldName);
+      }
+    }
+    
+    // 如果找不到，使用第一個title類型的欄位
+    if (actualTitleFields.length === 0) {
+      for (const [fieldName, property] of Object.entries(database.properties)) {
+        if (property.type === 'title') {
+          actualTitleFields.push(fieldName);
+          break;
+        }
+      }
+    }
+    
+    console.log('Found title fields:', actualTitleFields);
+    
+    // 動態找到其他欄位
+    const categoryField = database.properties['Category'];
+    const contentField = database.properties['Content'];
+    const infoField = database.properties['Info'];
+    const urlField = database.properties['URL'];
+    
+    // 檢查 Info 欄位的替代名稱
+    let actualInfoField = infoField;
+    if (!actualInfoField) {
+      const infoFieldNames = ['功能介紹', 'Description', 'DESCRIPTION', '描述', 'info'];
+      for (const fieldName of infoFieldNames) {
+        if (database.properties[fieldName]) {
+          actualInfoField = database.properties[fieldName];
+          break;
+        }
+      }
+    }
+    
     let filter = null;
     
     if (category && keyword) {
       // 同時搜尋類別和關鍵字
+      const titleFilters = actualTitleFields.map(fieldName => ({
+        property: fieldName,
+        title: { contains: keyword }
+      }));
+      
+      const searchFilters = [
+        ...titleFilters,
+        ...(contentField ? [{
+          property: 'Content',
+          rich_text: { contains: keyword }
+        }] : []),
+        ...(actualInfoField ? [{
+          property: actualInfoField === infoField ? 'Info' : Object.keys(database.properties).find(key => database.properties[key] === actualInfoField),
+          rich_text: { contains: keyword }
+        }] : []),
+        ...(urlField ? [{
+          property: 'URL',
+          [urlField.type === 'url' ? 'url' : 'rich_text']: { contains: keyword }
+        }] : [])
+      ];
+      
       filter = {
         and: [
-          {
+          ...(categoryField ? [{
             or: [
-              {
+              ...(categoryField.type === 'multi_select' ? [{
                 property: 'Category',
-                multi_select: {
-                  contains: category
-                }
-              },
-              {
+                multi_select: { contains: category }
+              }] : []),
+              ...(categoryField.type === 'select' ? [{
                 property: 'Category',
-                select: {
-                  equals: category
-                }
-              }
+                select: { equals: category }
+              }] : [])
             ]
-          },
+          }] : []),
           {
-            or: [
-              {
-                property: 'Name',
-                title: {
-                  contains: keyword
-                }
-              },
-              {
-                property: 'Title',
-                title: {
-                  contains: keyword
-                }
-              },
-              {
-                property: '標題',
-                title: {
-                  contains: keyword
-                }
-              },
-              {
-                property: '名稱',
-                title: {
-                  contains: keyword
-                }
-              },
-              {
-                property: 'Content',
-                rich_text: {
-                  contains: keyword
-                }
-              },
-              {
-                property: 'Info',
-                rich_text: {
-                  contains: keyword
-                }
-              },
-              {
-                property: 'URL',
-                url: {
-                  contains: keyword
-                }
-              },
-              {
-                property: 'URL',
-                rich_text: {
-                  contains: keyword
-                }
-              }
-            ]
+            or: searchFilters
           }
         ]
       };
     } else if (category) {
       // 只搜尋類別
-      filter = {
-        or: [
-          {
-            property: 'Category',
-            multi_select: {
-              contains: category
-            }
-          },
-          {
-            property: 'Category',
-            select: {
-              equals: category
-            }
-          }
-        ]
-      };
+      if (categoryField) {
+        filter = {
+          or: [
+            ...(categoryField.type === 'multi_select' ? [{
+              property: 'Category',
+              multi_select: { contains: category }
+            }] : []),
+            ...(categoryField.type === 'select' ? [{
+              property: 'Category',
+              select: { equals: category }
+            }] : [])
+          ]
+        };
+      }
     } else if (keyword) {
       // 只搜尋關鍵字
+      const titleFilters = actualTitleFields.map(fieldName => ({
+        property: fieldName,
+        title: { contains: keyword }
+      }));
+      
+      const searchFilters = [
+        ...titleFilters,
+        ...(contentField ? [{
+          property: 'Content',
+          rich_text: { contains: keyword }
+        }] : []),
+        ...(actualInfoField ? [{
+          property: actualInfoField === infoField ? 'Info' : Object.keys(database.properties).find(key => database.properties[key] === actualInfoField),
+          rich_text: { contains: keyword }
+        }] : []),
+        ...(urlField ? [{
+          property: 'URL',
+          [urlField.type === 'url' ? 'url' : 'rich_text']: { contains: keyword }
+        }] : [])
+      ];
+      
       filter = {
-        or: [
-          {
-            property: 'Name',
-            title: {
-              contains: keyword
-            }
-          },
-          {
-            property: 'Title',
-            title: {
-              contains: keyword
-            }
-          },
-          {
-            property: '標題',
-            title: {
-              contains: keyword
-            }
-          },
-          {
-            property: '名稱',
-            title: {
-              contains: keyword
-            }
-          },
-          {
-            property: 'Content',
-            rich_text: {
-              contains: keyword
-            }
-          },
-          {
-            property: 'Info',
-            rich_text: {
-              contains: keyword
-            }
-          },
-          {
-            property: 'URL',
-            url: {
-              contains: keyword
-            }
-          },
-          {
-            property: 'URL',
-            rich_text: {
-              contains: keyword
-            }
-          }
-        ]
+        or: searchFilters
       };
     }
     
@@ -462,11 +460,10 @@ async function searchNotion(keyword, category = null) {
     const results = response.results.map(page => {
       const properties = page.properties;
       
-      // 獲取標題
+      // 獲取標題 - 使用動態找到的欄位
       let title = '';
-      const titleFields = ['Name', 'Title', '標題', '名稱', 'name', 'title', 'ttitle'];
-      for (const fieldName of titleFields) {
-        if (properties[fieldName] && properties[fieldName].type === 'title' && properties[fieldName].title.length > 0) {
+      for (const fieldName of actualTitleFields) {
+        if (properties[fieldName] && properties[fieldName].title.length > 0) {
           title = properties[fieldName].title[0].text.content;
           break;
         }
@@ -476,7 +473,8 @@ async function searchNotion(keyword, category = null) {
       let category = '';
       if (properties['Category']) {
         if (properties['Category'].type === 'multi_select' && properties['Category'].multi_select.length > 0) {
-          category = properties['Category'].multi_select[0].name;
+          // 支援多標籤，用逗號分隔
+          category = properties['Category'].multi_select.map(tag => tag.name).join(', ');
         } else if (properties['Category'].type === 'select' && properties['Category'].select) {
           category = properties['Category'].select.name;
         }
@@ -488,19 +486,11 @@ async function searchNotion(keyword, category = null) {
         content = properties['Content'].rich_text[0].text.content;
       }
       
-      // 獲取功能介紹
+      // 獲取功能介紹 - 使用動態找到的欄位
       let info = '';
-      if (properties['Info'] && properties['Info'].rich_text.length > 0) {
-        info = properties['Info'].rich_text[0].text.content;
-      } else {
-        // 檢查其他可能的描述欄位
-        const infoFields = ['功能介紹', 'Description', 'DESCRIPTION', '描述', 'info'];
-        for (const fieldName of infoFields) {
-          if (properties[fieldName] && properties[fieldName].rich_text && properties[fieldName].rich_text.length > 0) {
-            info = properties[fieldName].rich_text[0].text.content;
-            break;
-          }
-        }
+      const infoFieldName = actualInfoField === infoField ? 'Info' : Object.keys(database.properties).find(key => database.properties[key] === actualInfoField);
+      if (infoFieldName && properties[infoFieldName] && properties[infoFieldName].rich_text && properties[infoFieldName].rich_text.length > 0) {
+        info = properties[infoFieldName].rich_text[0].text.content;
       }
       
       // 獲取 URL
