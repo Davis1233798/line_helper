@@ -68,7 +68,7 @@ async function analyzeWebsiteFunction(url, title, description, rawContent) {
 
 請提供：
 1. 工具名稱（繁體中文）
-2. 功能介紹（50字的繁體中文描述，說明這個工具的具體用途、主要功能和特色，內容要具體且實用）
+2. 功能介紹（50-80字的繁體中文描述，說明這個工具的具體用途、主要功能和特色，內容要具體且實用）
 
 注意：
 - 功能介紹必須在50-80字之間
@@ -80,7 +80,7 @@ async function analyzeWebsiteFunction(url, title, description, rawContent) {
 回傳格式：
 {
   "title": "工具名稱",
-  "info": "具體功能介紹（80-150字）"
+  "info": "具體功能介紹（50-80字）"
 }
 `;
 
@@ -96,12 +96,12 @@ async function analyzeWebsiteFunction(url, title, description, rawContent) {
     let info = analysis.info || analysis.function || '';
     
     // 如果回應太簡短或包含"AI工具"這種籠統描述，重新生成
-    if (info.length < 80 || info.includes('AI 工具') || info.includes('AI工具')) {
+    if (info.length < 50 || info.includes('AI 工具') || info.includes('AI工具')) {
       const detailedPrompt = `
 網站：${url}
 標題：${title}
 
-請詳細分析這個網站的具體功能，以繁體中文提供80-150字的詳細描述。請包含：
+請詳細分析這個網站的具體功能，以繁體中文提供50-80字的詳細描述。請包含：
 1. 工具的具體用途
 2. 主要功能特色
 3. 適用場景
@@ -118,12 +118,12 @@ async function analyzeWebsiteFunction(url, title, description, rawContent) {
     }
     
     // 確保長度在合理範圍內
-    if (info.length < 80) {
-      info = `${info}。此工具提供專業級的智能功能，能夠自動化處理複雜任務，提升工作效率，並具備直觀的使用者介面，適合各種專業應用場景。`;
+    if (info.length < 50) {
+      info = `${info}。此工具提供專業級的智能功能，能夠自動化處理複雜任務，提升工作效率。`;
     }
     
-    if (info.length > 150) {
-      info = info.substring(0, 147) + '...';
+    if (info.length > 80) {
+      info = info.substring(0, 77) + '...';
     }
     
     return {
