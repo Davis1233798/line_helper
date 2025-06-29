@@ -33,11 +33,11 @@ async function saveBatchToNotion(dataArray) {
       if (data.url) {
         const exists = await checkUrlExists(data.url);
         if (exists) {
-          console.log(`URL already exists, skipping: ${data.url}`);
+          console.log(`網址已存在，跳過：${data.url}`);
           results.push({
             success: false,
             url: null,
-            message: `連結已存在：${data.url}`,
+            message: `連結已存在：${data.title}`,
             title: data.title
           });
           continue;
@@ -49,11 +49,11 @@ async function saveBatchToNotion(dataArray) {
       results.push({
         success: true,
         url: pageUrl,
-        message: `已儲存：${data.title}`,
+        message: `已成功儲存：${data.title}`,
         title: data.title
       });
     } catch (error) {
-      console.error(`Error saving record: ${data.title}`, error);
+      console.error(`儲存記錄時發生錯誤：${data.title}`, error);
       results.push({
         success: false,
         url: null,

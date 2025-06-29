@@ -136,16 +136,16 @@ async function handleEvent(event) {
   }
 
   const userMessage = event.message.text;
-  console.log(`Received message: ${userMessage}`);
+  console.log(`收到訊息：${userMessage}`);
 
   try {
-    // 1. Parse message with LLM (現在回傳陣列)
+    // 1. 使用 LLM 解析訊息 (現在回傳陣列)
     const parsedDataArray = await llmParser.parseMessage(userMessage);
-    console.log('Parsed data:', parsedDataArray);
+    console.log('已解析的資料：', parsedDataArray);
 
-    // 2. 批量保存到Notion
+    // 2. 批量儲存至 Notion
     const results = await notionManager.saveBatchToNotion(parsedDataArray);
-    console.log('Notion save results:', results);
+    console.log('Notion 儲存結果：', results);
 
     // 3. 建立回覆訊息
     const successCount = results.filter(r => r.success).length;
@@ -161,7 +161,7 @@ async function handleEvent(event) {
         : `❌ ${result.message}`;
     } else {
       // 多個項目的情況
-      replyMessage = `處理完成！成功：${successCount}個，總計：${totalCount}個\n\n`;
+      replyMessage = `處理完成！成功：${successCount} 個，總計：${totalCount} 個\n\n`;
       
       results.forEach((result, index) => {
         if (result.success) {
@@ -171,10 +171,10 @@ async function handleEvent(event) {
         }
       });
       
-      // 添加成功儲存的連結（限制數量避免訊息過長）
+      // 新增成功儲存的連結（限制數量避免訊息過長）
       const successUrls = results.filter(r => r.success && r.url).slice(0, 3);
       if (successUrls.length > 0) {
-        replyMessage += '\n📝 查看新增項目：\n';
+        replyMessage += '\n📝 查看新增的項目：\n';
         successUrls.forEach(result => {
           replyMessage += `${result.url}\n`;
         });
@@ -186,16 +186,16 @@ async function handleEvent(event) {
       text: replyMessage,
     });
   } catch (error) {
-    console.error('Error handling event:', error);
+    console.error('處理事件時發生錯誤：', error);
     
-    // 嘗試回覆錯誤訊息給用戶
+    // 嘗試回覆錯誤訊息給使用者
     try {
       return client.replyMessage(event.replyToken, {
         type: 'text',
         text: '處理您的訊息時發生錯誤，請稍後再試。',
       });
     } catch (replyError) {
-      console.error('Error sending reply:', replyError);
+      console.error('傳送回覆時發生錯誤：', replyError);
     }
   }
 }

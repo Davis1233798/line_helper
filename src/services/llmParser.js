@@ -30,7 +30,7 @@ async function fetchWebsiteContent(url) {
     const description = $('meta[name="description"]').attr('content') ||
                        $('meta[property="og:description"]').attr('content') ||
                        $('p').first().text().trim() ||
-                       'AI工具網站';
+                       'AI 工具網站';
     
     return {
       title: title.substring(0, 100),
@@ -39,10 +39,10 @@ async function fetchWebsiteContent(url) {
   } catch (error) {
     console.error(`Error fetching ${url}:`, error.message);
     const siteName = url.replace('https://', '').replace('http://', '').split('/')[0];
-    return {
-      title: siteName,
-      description: 'AI工具網站'
-    };
+          return {
+        title: siteName,
+        description: 'AI 工具網站'
+      };
   }
 }
 
@@ -51,7 +51,7 @@ async function fetchMultipleWebsiteContents(urls) {
   const promises = urls.slice(0, 10).map(url => 
     fetchWebsiteContent(url).catch(error => ({
       title: url.replace('https://', '').replace('http://', ''),
-      description: 'AI工具'
+      description: 'AI 工具'
     }))
   );
   
@@ -86,8 +86,8 @@ async function parseMultipleLinks(message, urls) {
   console.log(`Processing ${fullUrls.length} URLs`);
   
   const prompt = `
-分析文本中的AI工具連結，為每個連結提取簡要信息。
-回傳JSON陣列格式：
+分析文本中的 AI 工具連結，為每個連結提取簡要資訊。
+回傳 JSON 陣列格式：
 [{"url":"完整網址","title":"工具名稱","description":"功能描述"}]
 
 文本："""${message}"""
@@ -114,7 +114,7 @@ async function parseMultipleLinks(message, urls) {
           linkData.push({
             url: url,
             title: url.replace('https://', '').split('/')[0],
-            description: 'AI工具'
+            description: 'AI 工具'
           });
         }
       }
@@ -156,7 +156,7 @@ async function parseMultipleLinks(message, urls) {
     const fallbackData = fullUrls.map((url, index) => ({
       category: "Link",
       title: websiteContents[index]?.title || url.replace('https://', '').split('/')[0],
-      content: `AI工具 - ${websiteContents[index]?.description || '實用工具'}`,
+             content: `AI 工具 - ${websiteContents[index]?.description || '實用工具'}`,
       url: url,
       apiKey: "",
       documentInfo: ""
@@ -231,7 +231,7 @@ async function parseSingleMessage(message) {
     return [{
       category: isUrl ? "Link" : "Other",
       title: websiteContent ? websiteContent.title : message.substring(0, 50) + (message.length > 50 ? "..." : ""),
-      content: websiteContent ? `AI工具 - ${websiteContent.description}` : message,
+      content: websiteContent ? `AI 工具 - ${websiteContent.description}` : message,
       url: isUrl ? url : "",
       apiKey: "",
       documentInfo: ""
