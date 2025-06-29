@@ -5,6 +5,12 @@ const cheerio = require('cheerio');
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
+// 定義標準分類
+const VALID_CATEGORIES = [
+  "其他", "運動與健身", "飲食", "娛樂", "旅遊", "創造力", 
+  "生產力工具", "資訊與閱讀", "遊戲", "購物", "教育", "財經", "社交"
+];
+
 // 改進的網站內容抓取函數
 async function fetchWebsiteContent(url) {
   try {
@@ -96,82 +102,25 @@ async function fetchWebsiteContent(url) {
   } catch (error) {
     console.error(`Error fetching ${url}:`, error.message);
     
-    // 嘗試使用網路搜尋作為備用方案
-    try {
-      const searchData = await searchWebInfo(url);
-      return searchData;
-    } catch (searchError) {
-      console.error(`Search fallback failed for ${url}:`, searchError.message);
-      
-      const siteName = url.replace(/^https?:\/\//, '').split('/')[0];
-      return {
-        title: siteName,
-        description: '',
-        keywords: '',
-        author: '',
-        pageType: '',
-        rawContent: '',
-        headings: [],
-        navLinks: [],
-        url: url
-      };
-    }
-  }
-}
-
-// 網路搜尋備用功能
-async function searchWebInfo(url) {
-  try {
     const siteName = url.replace(/^https?:\/\//, '').split('/')[0];
-    const searchQuery = `site:${siteName} 介紹 功能 用途`;
-    
-    // 使用 Gemini 模擬搜尋結果分析
-    const searchPrompt = `
-請根據以下網站 URL 提供該網站的基本資訊：${url}
-
-請提供：
-1. 網站名稱
-2. 網站主要功能描述
-3. 網站類型
-4. 主要用途
-
-回傳 JSON 格式：
-{
-  "title": "網站名稱",
-  "description": "功能描述",
-  "pageType": "網站類型",
-  "rawContent": "用途說明"
-}
-`;
-    
-    const result = await model.generateContent(searchPrompt);
-    const response = await result.response;
-    const text = response.text();
-    
-    let jsonString = text.replace(/```json\n|```/g, '').trim();
-    const searchData = JSON.parse(jsonString);
-    
     return {
-      title: searchData.title || siteName,
-      description: searchData.description || '',
+      title: siteName,
+      description: '',
       keywords: '',
       author: '',
-      pageType: searchData.pageType || '',
-      rawContent: searchData.rawContent || '',
+      pageType: '',
+      rawContent: '',
       headings: [],
       navLinks: [],
       url: url
     };
-  } catch (error) {
-    console.error(`Search info failed for ${url}:`, error.message);
-    throw error;
   }
 }
 
-// 使用 LLM 深度分析網站功能
+// 使用 LLM 深度分析網站功能並分類
 async function analyzeWebsiteFunction(url, websiteData) {
   const prompt = `
-你是一個專業的網站分析師。請根據以下詳細的網站資訊，提供繁體中文的深度分析。
+你是一個專業的網站分析師。請根據以下詳細的網站資訊，提供繁體中文的深度分析和分類。
 
 # 網站資訊
 - **URL**: ${url}
@@ -187,28 +136,32 @@ async function analyzeWebsiteFunction(url, websiteData) {
 # 分析要求
 請提供以下資訊：
 1. **工具名稱**: 網站的正確中文名稱或服務名稱
-2. **詳細功能介紹**: 60-100字的詳細描述，包含：
-   - 具體功能和用途
-   - 主要特色和優勢
-   - 適用場景和目標用戶
-   - 技術特點或創新點
+2. **類別分類**: 必須從以下類別中選擇一個："其他", "運動與健身", "飲食", "娛樂", "旅遊", "創造力", "生產力工具", "資訊與閱讀", "遊戲", "購物", "教育", "財經", "社交"
+3. **詳細功能介紹**: 請嚴格控制在60-100字以內的詳細描述
 
-# 分析指導原則
-- 基於實際網站內容進行分析，不要編造資訊
-- 如果是AI工具，請說明具體的AI功能類型
-- 如果是開發工具，請說明開發語言或平台
-- 如果是商業工具，請說明業務場景
-- 避免使用"專業工具"、"線上平台"等模糊詞語
-- 重點描述核心功能，而非一般性描述
+# 分類指導原則
+- **生產力工具**: AI助手、開發工具、辦公軟體、專案管理、自動化工具、代碼編輯器、雲端服務
+- **創造力**: 設計軟體、影片編輯、音樂製作、繪圖工具、創作平台、3D建模、圖像生成
+- **資訊與閱讀**: 新聞網站、部落格、學習資源、資料庫、文檔工具、搜尋引擎、百科
+- **教育**: 線上課程、教學平台、學習工具、技能培訓、語言學習、考試準備
+- **娛樂**: 影音平台、串流服務、娛樂內容、音樂平台（非遊戲）
+- **遊戲**: 專門的遊戲平台、遊戲工具、遊戲開發、電競相關
+- **社交**: 社群媒體、通訊軟體、論壇、交友平台、協作工具
+- **購物**: 電商平台、購物工具、比價服務、商品搜尋
+- **財經**: 投資平台、理財工具、加密貨幣、股票交易、金融分析
+- **運動與健身**: 健身應用、運動追蹤、健康管理、體能訓練
+- **飲食**: 美食應用、食譜、餐廳服務、營養管理、料理學習
+- **旅遊**: 旅遊規劃、住宿預訂、交通服務、旅遊資訊、地圖導航
 
 # 回傳格式
 請嚴格按照JSON格式回傳：
 {
   "title": "具體的工具或服務名稱",
-  "info": "60-100字的詳細功能描述，包含具體用途、特色和適用場景"
+  "category": "分類類別（必須從上述13個類別中選擇）",
+  "info": "嚴格60-100字的詳細功能描述，包含具體用途、特色和適用場景"
 }
 
-請確保描述內容具體、實用且基於實際網站資訊。
+請確保描述內容具體、實用且基於實際網站資訊，且字數嚴格控制在60-100字範圍內。
 `;
 
   try {
@@ -222,89 +175,66 @@ async function analyzeWebsiteFunction(url, websiteData) {
     // 驗證和改進回應品質
     let info = analysis.info || analysis.function || '';
     let title = analysis.title || websiteData.title || '';
+    let category = analysis.category || '其他';
     
-    // 如果描述太短或太籠統，嘗試重新生成
-    if (info.length < 60 || info.includes('專業工具') || info.includes('線上平台')) {
-      const enhancedPrompt = `
-根據網站 ${url} 的資訊：
-標題：${websiteData.title}
-描述：${websiteData.description}
-內容：${websiteData.rawContent}
-
-請提供一個60-100字的具體功能描述，必須包含：
-1. 工具的確切功能
-2. 解決什麼問題
-3. 主要使用場景
-4. 核心特色
-
-不要使用"專業工具"、"線上平台"等模糊詞語。
-只回傳功能描述文字，不要JSON格式：
-`;
-      
-      try {
-        const enhancedResult = await model.generateContent(enhancedPrompt);
-        const enhancedResponse = await enhancedResult.response;
-        const enhancedInfo = enhancedResponse.text().trim();
-        
-        if (enhancedInfo.length >= 60) {
-          info = enhancedInfo;
-        }
-      } catch (enhancedError) {
-        console.error('Enhanced analysis failed:', enhancedError);
-      }
+    // 驗證分類是否有效
+    if (!VALID_CATEGORIES.includes(category)) {
+      category = '其他';
     }
     
-    // 確保長度在合理範圍內
+    // 如果描述太短，生成備用描述
     if (info.length < 60) {
-      // 根據URL和網站內容生成更具體的描述
-      const siteName = url.replace(/^https?:\/\//, '').split('/')[0];
-      const domainKeywords = siteName.toLowerCase();
+      const siteName = websiteData.title || url.replace(/^https?:\/\//, '').split('/')[0];
+      const domainKeywords = url.toLowerCase();
+      const contentKeywords = (websiteData.description + ' ' + websiteData.rawContent).toLowerCase();
       
-      if (domainKeywords.includes('ai') || domainKeywords.includes('gpt') || domainKeywords.includes('chat')) {
-        info = `${title} 是一個AI驅動的智能助手平台，提供自然語言處理、對話問答、內容生成等功能。支援多種語言模型，能夠協助用戶進行創作、研究、程式開發等任務，適合個人與企業使用。`;
-      } else if (domainKeywords.includes('design') || domainKeywords.includes('figma') || domainKeywords.includes('canva')) {
-        info = `${title} 是一個專業的設計工具平台，提供圖形設計、原型製作、協作編輯等功能。支援多種設計格式，內建豐富的模板和素材庫，適合設計師、產品經理和創意工作者使用。`;
-      } else if (domainKeywords.includes('code') || domainKeywords.includes('dev') || domainKeywords.includes('github')) {
-        info = `${title} 是一個程式開發相關的工具平台，提供程式碼編輯、版本控制、專案管理等功能。支援多種程式語言，具備智能代碼提示和除錯功能，適合開發者和技術團隊使用。`;
-      } else if (domainKeywords.includes('video') || domainKeywords.includes('audio') || domainKeywords.includes('media')) {
-        info = `${title} 是一個多媒體處理工具，提供影片編輯、音訊處理、格式轉換等功能。支援多種媒體格式，具備智能編輯和特效功能，適合內容創作者和媒體工作者使用。`;
+      if (contentKeywords.includes('ai') || contentKeywords.includes('artificial intelligence') || contentKeywords.includes('machine learning')) {
+        info = `${siteName} 是一個AI技術驅動的智能工具，提供機器學習、數據分析、自動化處理等功能，能夠幫助用戶解決複雜的數據處理和決策問題，提升工作效率和準確性。`;
+        category = '生產力工具';
+      } else if (contentKeywords.includes('design') || contentKeywords.includes('creative') || contentKeywords.includes('visual')) {
+        info = `${siteName} 是一個創意設計工具，提供視覺設計、創意製作、多媒體編輯等功能，支援設計師和創作者進行專業級的作品製作，具備豐富的設計資源和直觀的操作介面。`;
+        category = '創造力';
+      } else if (contentKeywords.includes('data') || contentKeywords.includes('analytics') || contentKeywords.includes('dashboard')) {
+        info = `${siteName} 是一個數據分析平台，提供數據視覺化、報表生成、統計分析等功能，幫助企業和個人從數據中獲得洞察，支援決策制定和業務優化。`;
+        category = '生產力工具';
       } else {
-        info = `${title} 提供專業的線上服務，具備多項實用功能，包含資料處理、工作流程自動化、使用者介面友善等特色。適用於提升工作效率和生產力的各種應用場景。`;
+        info = `${siteName} 提供專業的線上服務，具備完整的功能套件和使用者友善的介面設計，能夠滿足用戶的多樣化需求，適用於提升工作效率和解決實際問題的各種場景。`;
       }
-    }
-    
-    // 限制長度在100字以內
-    if (info.length > 100) {
-      info = info.substring(0, 97) + '...';
     }
     
     return {
       title: title,
+      category: category,
       info: info
     };
   } catch (error) {
     console.error(`深度分析網站功能失敗：${url}`, error);
     
-    // 根據網站資訊生成備用描述
+    // 根據網站資訊生成備用描述和分類
     const siteName = url.replace(/^https?:\/\//, '').split('/')[0];
     const title = websiteData.title || siteName;
     
     let fallbackInfo = '';
+    let fallbackCategory = '其他';
     const domainKeywords = siteName.toLowerCase();
     const contentKeywords = (websiteData.description + ' ' + websiteData.rawContent).toLowerCase();
     
     if (contentKeywords.includes('ai') || contentKeywords.includes('artificial intelligence') || contentKeywords.includes('machine learning')) {
       fallbackInfo = `${title} 是一個AI技術驅動的智能工具，提供機器學習、數據分析、自動化處理等功能，能夠幫助用戶解決複雜的數據處理和決策問題，提升工作效率和準確性。`;
+      fallbackCategory = '生產力工具';
     } else if (contentKeywords.includes('design') || contentKeywords.includes('creative') || contentKeywords.includes('visual')) {
       fallbackInfo = `${title} 是一個創意設計工具，提供視覺設計、創意製作、多媒體編輯等功能，支援設計師和創作者進行專業級的作品製作，具備豐富的設計資源和直觀的操作介面。`;
+      fallbackCategory = '創造力';
     } else if (contentKeywords.includes('data') || contentKeywords.includes('analytics') || contentKeywords.includes('dashboard')) {
       fallbackInfo = `${title} 是一個數據分析平台，提供數據視覺化、報表生成、統計分析等功能，幫助企業和個人從數據中獲得洞察，支援決策制定和業務優化。`;
+      fallbackCategory = '生產力工具';
     } else {
       fallbackInfo = `${title} 提供專業的線上服務，具備完整的功能套件和使用者友善的介面設計，能夠滿足用戶的多樣化需求，適用於提升工作效率和解決實際問題的各種場景。`;
     }
     
     return {
       title: title,
+      category: fallbackCategory,
       info: fallbackInfo
     };
   }
@@ -316,12 +246,8 @@ async function analyzeBatchWebsiteFunctions(websiteDataList) {
     return [];
   }
 
-  const prompt = `
-你是一個專業的網站分析師。請分析以下網站列表，為每個網站提供繁體中文的詳細描述。
-
-# 網站列表分析
-${websiteDataList.map((data, index) => `
-## 網站 ${index + 1}
+  const websiteInfoText = websiteDataList.map((data, index) => {
+    return `## 網站 ${index + 1}
 - **URL**: ${data.url}
 - **標題**: ${data.title || '未知'}
 - **描述**: ${data.description || '無描述'}
@@ -330,36 +256,43 @@ ${websiteDataList.map((data, index) => `
 - **頁面類型**: ${data.pageType || '未知'}
 - **主要標題**: ${data.headings.length > 0 ? data.headings.slice(0, 5).join(', ') : '無標題'}
 - **導航功能**: ${data.navLinks.length > 0 ? data.navLinks.slice(0, 5).join(', ') : '無導航'}
-- **內容摘要**: ${data.rawContent || '無內容'}
-`).join('\n')}
+- **內容摘要**: ${data.rawContent || '無內容'}`;
+  }).join('\n\n');
+
+  const prompt = `
+你是一個專業的網站分析師。請分析以下網站列表，為每個網站提供繁體中文的詳細描述和分類。
+
+# 網站列表分析
+${websiteInfoText}
 
 # 分析要求
 請為每個網站提供：
 1. **工具名稱**: 網站的正確中文名稱或服務名稱
-2. **詳細功能介紹**: 60-100字的詳細描述，包含：
-   - 具體功能和用途
-   - 主要特色和優勢
-   - 適用場景和目標用戶
-   - 技術特點或創新點
+2. **類別分類**: 必須從以下類別中選擇一個："其他", "運動與健身", "飲食", "娛樂", "旅遊", "創造力", "生產力工具", "資訊與閱讀", "遊戲", "購物", "教育", "財經", "社交"
+3. **詳細功能介紹**: 請嚴格控制在60-100字以內的詳細描述
 
-# 分析指導原則
-- 基於實際網站內容進行分析，不要編造資訊
-- 如果是AI工具，請說明具體的AI功能類型（如：自然語言處理、圖像生成、代碼生成等）
-- 如果是開發工具，請說明支援的程式語言或開發平台
-- 如果是設計工具，請說明設計類型和應用場景
-- 如果是商業工具，請說明解決的業務問題
-- 避免使用"專業工具"、"線上平台"等模糊詞語
-- 重點描述核心功能和實際價值
+# 分類指導原則
+- **生產力工具**: AI助手、開發工具、辦公軟體、專案管理、自動化工具、代碼編輯器、雲端服務
+- **創造力**: 設計軟體、影片編輯、音樂製作、繪圖工具、創作平台、3D建模、圖像生成
+- **資訊與閱讀**: 新聞網站、部落格、學習資源、資料庫、文檔工具、搜尋引擎、百科
+- **教育**: 線上課程、教學平台、學習工具、技能培訓、語言學習、考試準備
+- **娛樂**: 影音平台、串流服務、娛樂內容、音樂平台（非遊戲）
+- **遊戲**: 專門的遊戲平台、遊戲工具、遊戲開發、電競相關
+- **社交**: 社群媒體、通訊軟體、論壇、交友平台、協作工具
+- **購物**: 電商平台、購物工具、比價服務、商品搜尋
+- **財經**: 投資平台、理財工具、加密貨幣、股票交易、金融分析
+- **運動與健身**: 健身應用、運動追蹤、健康管理、體能訓練
+- **飲食**: 美食應用、食譜、餐廳服務、營養管理、料理學習
+- **旅遊**: 旅遊規劃、住宿預訂、交通服務、旅遊資訊、地圖導航
 
 # 回傳格式
 請嚴格按照JSON陣列格式回傳，按照輸入順序：
 [
-  {"title": "網站1的具體工具名稱", "info": "60-100字的詳細功能描述"},
-  {"title": "網站2的具體工具名稱", "info": "60-100字的詳細功能描述"},
-  ...
+  {"title": "網站1的具體工具名稱", "category": "分類類別", "info": "嚴格60-100字的詳細功能描述"},
+  {"title": "網站2的具體工具名稱", "category": "分類類別", "info": "嚴格60-100字的詳細功能描述"}
 ]
 
-請確保每個描述都具體、實用且基於實際網站資訊。
+請確保每個描述都具體、實用且基於實際網站資訊，且字數嚴格控制在60-100字範圍內。
 `;
 
   try {
@@ -378,48 +311,43 @@ ${websiteDataList.map((data, index) => `
     const processedResults = websiteDataList.map((data, index) => {
       let analysis = analysisResults[index] || {
         title: data.title,
+        category: '其他',
         info: ''
       };
       
       // 確保 info 欄位長度適中且內容豐富
       let info = analysis.info || '';
       let title = analysis.title || data.title || '';
+      let category = analysis.category || '其他';
       
-      // 如果回應太簡短或太籠統，使用智能預設描述
-      if (info.length < 60 || info.includes('專業工具') || info.includes('線上平台')) {
+      // 驗證分類是否有效
+      if (!VALID_CATEGORIES.includes(category)) {
+        category = '其他';
+      }
+      
+      // 如果回應太簡短，使用智能預設描述
+      if (info.length < 60) {
         const siteName = data.url.replace(/^https?:\/\//, '').split('/')[0];
         const domainKeywords = siteName.toLowerCase();
         const contentKeywords = (data.description + ' ' + data.rawContent).toLowerCase();
         
-        if (contentKeywords.includes('ai') || contentKeywords.includes('artificial intelligence') || contentKeywords.includes('machine learning') || contentKeywords.includes('gpt') || contentKeywords.includes('chat')) {
+        if (contentKeywords.includes('ai') || contentKeywords.includes('artificial intelligence') || contentKeywords.includes('machine learning')) {
           info = `${title} 是一個AI驅動的智能工具，提供自然語言處理、機器學習分析、智能問答等功能。支援多種AI模型，能夠協助用戶進行內容創作、數據分析、自動化任務處理，適合研究者、開發者和商業用戶使用。`;
+          category = '生產力工具';
         } else if (contentKeywords.includes('design') || contentKeywords.includes('creative') || domainKeywords.includes('design')) {
           info = `${title} 是一個專業的設計創作平台，提供圖形設計、視覺創作、原型製作等功能。內建豐富的設計模板和素材庫，支援多人協作編輯，適合設計師和創意工作者使用。`;
-        } else if (contentKeywords.includes('code') || contentKeywords.includes('development') || contentKeywords.includes('programming') || contentKeywords.includes('github') || contentKeywords.includes('dev')) {
+          category = '創造力';
+        } else if (contentKeywords.includes('code') || contentKeywords.includes('development') || contentKeywords.includes('programming')) {
           info = `${title} 是一個程式開發和技術工具平台，提供代碼編輯、專案管理、版本控制等功能。支援多種程式語言和開發框架，具備智能提示和自動化功能，適合開發者和技術團隊使用。`;
-        } else if (contentKeywords.includes('video') || contentKeywords.includes('audio') || contentKeywords.includes('media') || contentKeywords.includes('editor')) {
-          info = `${title} 是一個多媒體編輯工具，提供影片剪輯、音訊處理、特效製作等功能。支援多種媒體格式，具備專業級的編輯功能和豐富的特效庫，適合內容創作者、影片製作者和媒體工作者使用。`;
-        } else if (contentKeywords.includes('data') || contentKeywords.includes('analytics') || contentKeywords.includes('dashboard') || contentKeywords.includes('chart')) {
-          info = `${title} 是一個數據分析和視覺化平台，提供數據處理、統計分析、圖表製作等功能。支援多種數據來源和視覺化類型，具備即時更新和協作分享功能，適合數據分析師、業務人員和決策者使用。`;
-        } else if (contentKeywords.includes('productivity') || contentKeywords.includes('task') || contentKeywords.includes('management') || contentKeywords.includes('workflow')) {
-          info = `${title} 是一個生產力和專案管理工具，提供任務管理、工作流程自動化、團隊協作等功能。支援多種整合應用，具備智能提醒和進度追蹤功能，適合專案經理、團隊領導和企業用戶使用。`;
+          category = '生產力工具';
         } else {
           info = `${title} 提供專業的線上服務解決方案，具備完整的功能模組和直觀的操作介面。支援多種應用場景和客製化需求，能夠有效提升使用者的工作效率和產品體驗，適合各行業的專業人士使用。`;
         }
       }
       
-      // 確保長度在合理範圍內
-      if (info.length < 60) {
-        info = `${info}。此工具具備先進的技術架構和使用者友善的介面設計，能夠滿足專業用戶的高標準需求。`;
-      }
-      
-      // 限制長度在100字以內
-      if (info.length > 100) {
-        info = info.substring(0, 97) + '...';
-      }
-      
       return {
         title: title,
+        category: category,
         info: info
       };
     });
@@ -436,19 +364,24 @@ ${websiteDataList.map((data, index) => `
       const contentKeywords = (data.description + ' ' + data.rawContent).toLowerCase();
       
       let defaultInfo = '';
+      let defaultCategory = '其他';
       
-      if (contentKeywords.includes('ai') || contentKeywords.includes('gpt') || contentKeywords.includes('chat') || domainKeywords.includes('ai')) {
+      if (contentKeywords.includes('ai') || contentKeywords.includes('gpt') || contentKeywords.includes('chat')) {
         defaultInfo = `${title} 是一個AI技術驅動的智能助手平台，提供自然語言處理、對話問答、內容生成等功能。支援多種AI模型和應用場景，能夠協助用戶進行創作、研究和問題解決，提升工作效率和創新能力。`;
-      } else if (contentKeywords.includes('design') || contentKeywords.includes('creative') || domainKeywords.includes('design')) {
+        defaultCategory = '生產力工具';
+      } else if (contentKeywords.includes('design') || contentKeywords.includes('creative')) {
         defaultInfo = `${title} 是一個創意設計和視覺製作平台，提供圖形設計、原型製作、多媒體編輯等功能。內建豐富的設計資源和模板庫，支援團隊協作和版本管理，適合設計師和創意工作者使用。`;
-      } else if (contentKeywords.includes('code') || contentKeywords.includes('dev') || domainKeywords.includes('code')) {
+        defaultCategory = '創造力';
+      } else if (contentKeywords.includes('code') || contentKeywords.includes('dev')) {
         defaultInfo = `${title} 是一個程式開發和技術工具平台，提供代碼編輯、專案管理、版本控制等功能。支援多種程式語言和開發框架，具備智能提示和自動化功能，適合開發者和技術團隊使用。`;
+        defaultCategory = '生產力工具';
       } else {
         defaultInfo = `${title} 提供專業的數位服務解決方案，具備完整的功能套件和現代化的使用者介面。支援多種應用場景和客製化需求，能夠有效提升工作效率和使用者體驗，適合各領域的專業人士使用。`;
       }
       
       return {
         title: title,
+        category: defaultCategory,
         info: defaultInfo
       };
     });
@@ -503,19 +436,24 @@ async function fetchMultipleWebsiteContents(urls) {
         const contentKeywords = (data.description + ' ' + data.rawContent).toLowerCase();
         
         let fallbackInfo = '';
+        let fallbackCategory = '其他';
         
-        if (contentKeywords.includes('ai') || contentKeywords.includes('gpt') || domainKeywords.includes('ai')) {
+        if (contentKeywords.includes('ai') || contentKeywords.includes('gpt')) {
           fallbackInfo = `${title} 是一個AI技術平台，提供智能分析、自然語言處理、機器學習等功能。支援多種AI應用場景，能夠協助用戶進行智能化的數據處理和決策支援，適合技術開發者和企業用戶使用。`;
-        } else if (contentKeywords.includes('design') || contentKeywords.includes('creative') || domainKeywords.includes('design')) {
+          fallbackCategory = '生產力工具';
+        } else if (contentKeywords.includes('design') || contentKeywords.includes('creative')) {
           fallbackInfo = `${title} 是一個設計創作工具，提供視覺設計、創意製作、多媒體編輯等功能。內建豐富的設計元素和模板資源，支援團隊協作和專案管理，適合設計師和創意專業人士使用。`;
-        } else if (contentKeywords.includes('code') || contentKeywords.includes('dev') || domainKeywords.includes('code')) {
+          fallbackCategory = '創造力';
+        } else if (contentKeywords.includes('code') || contentKeywords.includes('dev')) {
           fallbackInfo = `${title} 是一個開發工具平台，提供程式編輯、專案管理、版本控制等功能。支援多種開發語言和框架，具備智能代碼提示和自動化部署功能，適合軟體開發者和技術團隊使用。`;
+          fallbackCategory = '生產力工具';
         } else {
           fallbackInfo = `${title} 提供專業的數位解決方案，具備完整的功能模組和現代化的使用者介面。支援多種應用需求和客製化設定，能夠有效提升工作效率和使用體驗，適合各領域專業人士使用。`;
         }
         
         return {
           title: title,
+          category: fallbackCategory,
           info: fallbackInfo
         };
       });
@@ -599,7 +537,7 @@ ${fullUrls.map((url, index) => `${index + 1}. ${url}`).join('\n')}
       }
     }
     
-    // 批量分析網站內容 (使用新的8個一組批次處理)
+    // 批量分析網站內容
     const websiteAnalysis = await fetchMultipleWebsiteContents(fullUrls);
     
     // 建立最終資料
@@ -611,14 +549,15 @@ ${fullUrls.map((url, index) => `${index + 1}. ${url}`).join('\n')}
       
       const websiteData = websiteAnalysis[index] || {
         title: linkInfo.title,
+        category: '其他',
         info: linkInfo.description
       };
       
       return {
-        category: "Link",
+        category: websiteData.category || "其他",
         title: websiteData.title || linkInfo.title,
-        content: linkInfo.description, // 保持原始從訊息中提取的內容
-        info: websiteData.info || '這個工具提供專業的線上服務，具備完整的功能套件和現代化的使用者介面，能夠有效提升工作效率和使用者體驗，適合各種專業應用場景。', // 網站深度分析的功能介紹
+        content: linkInfo.description, 
+        info: websiteData.info || '這個工具提供專業的線上服務，具備完整的功能套件和現代化的使用者介面，能夠有效提升工作效率和使用者體驗，適合各種專業應用場景。',
         url: url,
         apiKey: "",
         documentInfo: ""
@@ -630,14 +569,14 @@ ${fullUrls.map((url, index) => `${index + 1}. ${url}`).join('\n')}
   } catch (error) {
     console.error('解析連結時發生錯誤：', error);
     
-    // 備用方案 (使用新的8個一組批次處理)
+    // 備用方案
     const websiteAnalysis = await fetchMultipleWebsiteContents(fullUrls);
     
     const fallbackData = fullUrls.map((url, index) => ({
-      category: "Link",
+      category: websiteAnalysis[index]?.category || "其他",
       title: websiteAnalysis[index]?.title || url.replace(/^https?:\/\//, '').split('/')[0],
-      content: '從用戶訊息中提取的連結', // 原始內容
-      info: websiteAnalysis[index]?.info || '這個工具提供專業的數位服務解決方案，具備先進的技術架構和使用者友善的介面設計，能夠滿足多樣化的應用需求，提升工作效率和使用體驗。', // 功能介紹
+      content: '從用戶訊息中提取的連結',
+      info: websiteAnalysis[index]?.info || '這個工具提供專業的數位服務解決方案，具備先進的技術架構和使用者友善的介面設計，能夠滿足多樣化的應用需求，提升工作效率和使用體驗。',
       url: url,
       apiKey: "",
       documentInfo: ""
@@ -653,13 +592,28 @@ async function parseSingleMessage(message) {
 
 輸出 JSON 格式應為：
 {
-  "category": "", // 類別：可以是 "Note" (筆記), "Todo" (待辦事項), "Link" (連結), "API_Key" (API金鑰), "Document" (文件), "Idea" (想法), "Other" (其他)
+  "category": "", // 類別：必須是以下其中一個："其他", "運動與健身", "飲食", "娛樂", "旅遊", "創造力", "生產力工具", "資訊與閱讀", "遊戲", "購物", "教育", "財經", "社交"
   "title": "", // 訊息的簡要標題，如果沒有明確標題，請從內容中提取關鍵詞
   "content": "", // 訊息的詳細內容
   "url": "", // 如果訊息包含URL，請提取
   "apiKey": "", // 如果訊息包含API金鑰，請提取
   "documentInfo": "" // 如果訊息是關於文件，請提取文件相關資訊
 }
+
+分類指導原則：
+- "生產力工具": AI助手、開發工具、辦公軟體、專案管理、自動化工具
+- "創造力": 設計軟體、影片編輯、音樂製作、繪圖工具、創作平台
+- "資訊與閱讀": 新聞網站、部落格、學習資源、資料庫、文檔工具
+- "教育": 線上課程、教學平台、學習工具、技能培訓
+- "娛樂": 影音平台、遊戲（非主要遊戲）、娛樂內容
+- "遊戲": 專門的遊戲平台、遊戲工具、遊戲相關服務
+- "社交": 社群媒體、通訊軟體、論壇、交友平台
+- "購物": 電商平台、購物工具、比價服務
+- "財經": 投資平台、理財工具、加密貨幣、金融服務
+- "運動與健身": 健身應用、運動追蹤、健康管理
+- "飲食": 美食應用、食譜、餐廳服務、營養管理
+- "旅遊": 旅遊規劃、住宿預訂、交通服務、旅遊資訊
+- "其他": 無法歸類到以上任何類別的內容
 
 用戶訊息：
 """${message}"""
@@ -691,6 +645,7 @@ async function parseSingleMessage(message) {
         
         if (analysis) {
           parsedData.title = analysis.title || parsedData.title;
+          parsedData.category = analysis.category || parsedData.category;
           parsedData.info = analysis.info;
         }
       } catch (analysisError) {
@@ -733,7 +688,7 @@ async function parseSingleMessage(message) {
     
     // Fallback to a default structure if LLM parsing fails
     return [{
-      category: isUrl ? "Link" : "Other",
+      category: analysis ? analysis.category || "其他" : (isUrl ? "其他" : "其他"),
       title: analysis ? analysis.title : message.substring(0, 50) + (message.length > 50 ? "..." : ""),
       content: message, // 保持原始訊息內容
       info: analysis ? analysis.info : '', // 網站功能介紹
@@ -744,6 +699,60 @@ async function parseSingleMessage(message) {
   }
 }
 
+// 模糊搜尋功能
+async function fuzzySearch(query, searchData) {
+  if (!query || !searchData || !Array.isArray(searchData)) {
+    return [];
+  }
+  
+  const keywords = query.toLowerCase().split(/\s+/);
+  const results = [];
+  
+  for (const item of searchData) {
+    let score = 0;
+    const searchableText = `${item.title || ''} ${item.category || ''} ${item.content || ''} ${item.info || ''} ${item.url || ''}`.toLowerCase();
+    
+    // 計算匹配分數
+    for (const keyword of keywords) {
+      if (searchableText.includes(keyword)) {
+        // 標題匹配權重最高
+        if ((item.title || '').toLowerCase().includes(keyword)) {
+          score += 10;
+        }
+        // 分類匹配權重較高
+        if ((item.category || '').toLowerCase().includes(keyword)) {
+          score += 8;
+        }
+        // URL匹配
+        if ((item.url || '').toLowerCase().includes(keyword)) {
+          score += 6;
+        }
+        // 內容匹配
+        if ((item.content || '').toLowerCase().includes(keyword) || (item.info || '').toLowerCase().includes(keyword)) {
+          score += 3;
+        }
+      }
+    }
+    
+    if (score > 0) {
+      results.push({
+        ...item,
+        searchScore: score
+      });
+    }
+  }
+  
+  // 依分數排序，分數相同則按標題排序
+  return results.sort((a, b) => {
+    if (b.searchScore !== a.searchScore) {
+      return b.searchScore - a.searchScore;
+    }
+    return (a.title || '').localeCompare(b.title || '');
+  });
+}
+
 module.exports = {
   parseMessage,
+  fuzzySearch,
+  VALID_CATEGORIES
 };

@@ -141,7 +141,7 @@ async function saveToNotion(data) {
         rich_text: [
           {
             text: {
-              content: data.info.length > 2000 ? data.info.substring(0, 2000) + '...' : data.info,
+              content: data.info,
             },
           },
         ],
@@ -157,7 +157,7 @@ async function saveToNotion(data) {
             rich_text: [
               {
                 text: {
-                  content: data.info.length > 2000 ? data.info.substring(0, 2000) + '...' : data.info,
+                  content: data.info,
                 },
               },
             ],
@@ -293,8 +293,257 @@ async function saveToNotion(data) {
   }
 }
 
+// 搜尋 Notion 資料庫
+async function searchNotion(keyword, category = null) {
+  try {
+    let filter = null;
+    
+    if (category && keyword) {
+      // 同時搜尋類別和關鍵字
+      filter = {
+        and: [
+          {
+            or: [
+              {
+                property: 'Category',
+                multi_select: {
+                  contains: category
+                }
+              },
+              {
+                property: 'Category',
+                select: {
+                  equals: category
+                }
+              }
+            ]
+          },
+          {
+            or: [
+              {
+                property: 'Name',
+                title: {
+                  contains: keyword
+                }
+              },
+              {
+                property: 'Title',
+                title: {
+                  contains: keyword
+                }
+              },
+              {
+                property: '標題',
+                title: {
+                  contains: keyword
+                }
+              },
+              {
+                property: '名稱',
+                title: {
+                  contains: keyword
+                }
+              },
+              {
+                property: 'Content',
+                rich_text: {
+                  contains: keyword
+                }
+              },
+              {
+                property: 'Info',
+                rich_text: {
+                  contains: keyword
+                }
+              },
+              {
+                property: 'URL',
+                url: {
+                  contains: keyword
+                }
+              },
+              {
+                property: 'URL',
+                rich_text: {
+                  contains: keyword
+                }
+              }
+            ]
+          }
+        ]
+      };
+    } else if (category) {
+      // 只搜尋類別
+      filter = {
+        or: [
+          {
+            property: 'Category',
+            multi_select: {
+              contains: category
+            }
+          },
+          {
+            property: 'Category',
+            select: {
+              equals: category
+            }
+          }
+        ]
+      };
+    } else if (keyword) {
+      // 只搜尋關鍵字
+      filter = {
+        or: [
+          {
+            property: 'Name',
+            title: {
+              contains: keyword
+            }
+          },
+          {
+            property: 'Title',
+            title: {
+              contains: keyword
+            }
+          },
+          {
+            property: '標題',
+            title: {
+              contains: keyword
+            }
+          },
+          {
+            property: '名稱',
+            title: {
+              contains: keyword
+            }
+          },
+          {
+            property: 'Content',
+            rich_text: {
+              contains: keyword
+            }
+          },
+          {
+            property: 'Info',
+            rich_text: {
+              contains: keyword
+            }
+          },
+          {
+            property: 'URL',
+            url: {
+              contains: keyword
+            }
+          },
+          {
+            property: 'URL',
+            rich_text: {
+              contains: keyword
+            }
+          }
+        ]
+      };
+    }
+    
+    const response = await notion.databases.query({
+      database_id: databaseId,
+      filter: filter,
+      sorts: [
+        {
+          timestamp: 'created_time',
+          direction: 'descending'
+        }
+      ],
+      page_size: 20 // 限制返回數量
+    });
+    
+    // 處理搜尋結果
+    const results = response.results.map(page => {
+      const properties = page.properties;
+      
+      // 獲取標題
+      let title = '';
+      const titleFields = ['Name', 'Title', '標題', '名稱', 'name', 'title', 'ttitle'];
+      for (const fieldName of titleFields) {
+        if (properties[fieldName] && properties[fieldName].type === 'title' && properties[fieldName].title.length > 0) {
+          title = properties[fieldName].title[0].text.content;
+          break;
+        }
+      }
+      
+      // 獲取類別
+      let category = '';
+      if (properties['Category']) {
+        if (properties['Category'].type === 'multi_select' && properties['Category'].multi_select.length > 0) {
+          category = properties['Category'].multi_select[0].name;
+        } else if (properties['Category'].type === 'select' && properties['Category'].select) {
+          category = properties['Category'].select.name;
+        }
+      }
+      
+      // 獲取內容
+      let content = '';
+      if (properties['Content'] && properties['Content'].rich_text.length > 0) {
+        content = properties['Content'].rich_text[0].text.content;
+      }
+      
+      // 獲取功能介紹
+      let info = '';
+      if (properties['Info'] && properties['Info'].rich_text.length > 0) {
+        info = properties['Info'].rich_text[0].text.content;
+      } else {
+        // 檢查其他可能的描述欄位
+        const infoFields = ['功能介紹', 'Description', 'DESCRIPTION', '描述', 'info'];
+        for (const fieldName of infoFields) {
+          if (properties[fieldName] && properties[fieldName].rich_text && properties[fieldName].rich_text.length > 0) {
+            info = properties[fieldName].rich_text[0].text.content;
+            break;
+          }
+        }
+      }
+      
+      // 獲取 URL
+      let url = '';
+      if (properties['URL']) {
+        if (properties['URL'].type === 'url' && properties['URL'].url) {
+          url = properties['URL'].url;
+        } else if (properties['URL'].type === 'rich_text' && properties['URL'].rich_text.length > 0) {
+          url = properties['URL'].rich_text[0].text.content;
+        }
+      }
+      
+      return {
+        id: page.id,
+        title: title || '無標題',
+        category: category || '其他',
+        content: content.substring(0, 200) + (content.length > 200 ? '...' : ''),
+        info: info.substring(0, 300) + (info.length > 300 ? '...' : ''),
+        url: url || '',
+        notionUrl: page.url,
+        createdTime: page.created_time
+      };
+    });
+    
+    return {
+      success: true,
+      count: results.length,
+      results: results
+    };
+    
+  } catch (error) {
+    console.error('搜尋 Notion 資料庫時發生錯誤：', error);
+    return {
+      success: false,
+      error: error.message,
+      results: []
+    };
+  }
+}
+
 module.exports = {
   saveToNotion,
   saveBatchToNotion,
   checkUrlExists,
+  searchNotion,
 };

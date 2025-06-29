@@ -129,6 +129,122 @@ app.post('/webhook-raw', express.raw({type: 'application/json'}), (req, res) => 
     console.error('Raw webhook error:', error);
   }
 });
+// 處理搜尋查詢
+async function handleSearchQuery(event, userMessage) {
+  try {
+    // 解析搜尋查詢
+    const searchParams = parseSearchQuery(userMessage);
+    console.log('搜尋參數：', searchParams);
+    
+    // 執行搜尋
+    const searchResult = await notionManager.searchNotion(searchParams.keyword, searchParams.category);
+    console.log('搜尋結果：', searchResult);
+    
+    if (!searchResult.success) {
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `搜尋時發生錯誤：${searchResult.error}`,
+      });
+    }
+    
+    if (searchResult.count === 0) {
+      let replyText = '沒有找到符合條件的結果。';
+      if (searchParams.category && searchParams.keyword) {
+        replyText = `沒有找到類別「${searchParams.category}」且包含「${searchParams.keyword}」的結果。`;
+      } else if (searchParams.category) {
+        replyText = `沒有找到類別「${searchParams.category}」的結果。`;
+      } else if (searchParams.keyword) {
+        replyText = `沒有找到包含「${searchParams.keyword}」的結果。`;
+      }
+      
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: replyText,
+      });
+    }
+    
+    // 格式化搜尋結果
+    let replyMessage = `🔍 找到 ${searchResult.count} 個結果：\n\n`;
+    
+    searchResult.results.forEach((item, index) => {
+      replyMessage += `${index + 1}. 【${item.category}】${item.title}\n`;
+      if (item.info) {
+        replyMessage += `📝 ${item.info}\n`;
+      }
+      if (item.url) {
+        replyMessage += `🔗 ${item.url}\n`;
+      }
+      replyMessage += `📄 ${item.notionUrl}\n\n`;
+    });
+    
+    // 如果訊息太長，進行截斷
+    if (replyMessage.length > 4500) {
+      const truncatedResults = searchResult.results.slice(0, 3);
+      replyMessage = `🔍 找到 ${searchResult.count} 個結果，顯示前3個：\n\n`;
+      
+      truncatedResults.forEach((item, index) => {
+        replyMessage += `${index + 1}. 【${item.category}】${item.title}\n`;
+        if (item.info) {
+          replyMessage += `📝 ${item.info.substring(0, 100)}${item.info.length > 100 ? '...' : ''}\n`;
+        }
+        if (item.url) {
+          replyMessage += `🔗 ${item.url}\n`;
+        }
+        replyMessage += `📄 ${item.notionUrl}\n\n`;
+      });
+      
+      if (searchResult.count > 3) {
+        replyMessage += `還有 ${searchResult.count - 3} 個結果，請使用更具體的關鍵字搜尋。`;
+      }
+    }
+    
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: replyMessage,
+    });
+    
+  } catch (error) {
+    console.error('處理搜尋查詢時發生錯誤：', error);
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: '搜尋時發生錯誤，請稍後再試。',
+    });
+  }
+}
+
+// 解析搜尋查詢
+function parseSearchQuery(message) {
+  let keyword = '';
+  let category = null;
+  
+  // 移除查詢關鍵詞
+  let cleanMessage = message
+    .replace(/查詢|搜尋|找|查找|查|search/g, '')
+    .trim();
+  
+  // 檢測類別
+  for (const cat of llmParser.VALID_CATEGORIES) {
+    if (cleanMessage.includes(cat)) {
+      category = cat;
+      cleanMessage = cleanMessage.replace(cat, '').trim();
+      break;
+    }
+  }
+  
+  // 剩餘的文字作為關鍵字
+  if (cleanMessage.length > 0) {
+    // 移除常見的連接詞
+    keyword = cleanMessage
+      .replace(/的|中|和|或|與|有關|關於|相關/g, '')
+      .trim();
+  }
+  
+  return {
+    keyword: keyword || null,
+    category: category,
+    originalMessage: message
+  };
+}
 
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') {
@@ -139,6 +255,20 @@ async function handleEvent(event) {
   console.log(`收到訊息：${userMessage}`);
 
   try {
+    // 檢測是否為查詢請求
+    const isSearchQuery = userMessage.includes('查詢') || 
+                         userMessage.includes('搜尋') || 
+                         userMessage.includes('找') || 
+                         userMessage.includes('查找') ||
+                         userMessage.startsWith('查') ||
+                         userMessage.includes('search');
+    
+    if (isSearchQuery) {
+      // 處理搜尋請求
+      return await handleSearchQuery(event, userMessage);
+    }
+
+    // 原有的處理邏輯
     // 1. 使用 LLM 解析訊息 (現在回傳陣列)
     const parsedDataArray = await llmParser.parseMessage(userMessage);
     console.log('已解析的資料：', parsedDataArray);
