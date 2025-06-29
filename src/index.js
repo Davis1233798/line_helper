@@ -339,35 +339,40 @@ async function handleEvent(event) {
     if (calendarEvents.length > 0) {
       replyMessage += '\n\n📅 發現重要日期：\n';
       
-      // 非同步處理行事曆事件新增
-      const calendarPromises = calendarEvents.map(event => 
-        googleCalendarManager.addEventToCalendar(event)
-      );
-      const calendarResults = await Promise.all(calendarPromises);
+      try {
+        // 非同步處理行事曆事件新增
+        const calendarPromises = calendarEvents.map(event => 
+          googleCalendarManager.addEventToCalendar(event)
+        );
+        const calendarResults = await Promise.all(calendarPromises);
 
-      calendarResults.forEach((calResult, index) => {
-        const event = calendarEvents[index];
-        const eventDate = new Date(event.date);
-        const formattedDate = eventDate.toLocaleString('zh-TW', {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-        
-        replyMessage += `\n${index + 1}. ${event.title} - ${formattedDate}\n`;
-        if (calResult.success) {
-          replyMessage += `✅ ${calResult.message}\n`;
-          replyMessage += `🔗 查看事件: ${calResult.url}\n`;
-        } else {
-          replyMessage += `❌ ${calResult.message}\n`;
-          // 如果自動新增失敗，提供手動連結
-          replyMessage += `🔗 手動新增Google日曆: ${event.googleCalendarUrl}\n`;
+        calendarResults.forEach((calResult, index) => {
+          const event = calendarEvents[index];
+          const eventDate = new Date(event.date);
+          const formattedDate = eventDate.toLocaleString('zh-TW', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+          
+          replyMessage += `\n${index + 1}. ${event.title} - ${formattedDate}\n`;
+          if (calResult.success) {
+            replyMessage += `✅ ${calResult.message}\n`;
+            replyMessage += `🔗 查看事件: ${calResult.url}\n`;
+          } else {
+            replyMessage += `❌ ${calResult.message}\n`;
+            // 如果自動新增失敗，提供手動連結
+            replyMessage += `🔗 手動新增Google日曆: ${event.googleCalendarUrl}\n`;
+          }
           // 無論成功與否，都提供Apple Calendar的下載連結
           replyMessage += `🍎 手動下載Apple日曆: ${event.appleCalendarUrl}\n`;
-        }
-      });
+        });
+      } catch (calendarError) {
+        console.error('處理行事曆事件時發生嚴重錯誤:', calendarError);
+        replyMessage += '\n\n⚠️ 自動新增行事曆功能暫時無法使用。';
+      }
     }
 
     return client.replyMessage(event.replyToken, {
