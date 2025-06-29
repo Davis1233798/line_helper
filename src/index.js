@@ -144,13 +144,49 @@ async function handleEvent(event) {
     console.log('Parsed data:', parsedData);
 
     // 2. Save to Notion
-    const notionPageUrl = await notionManager.saveToNotion(parsedData);
-    console.log('Notion page URL:', notionPageUrl);
+    const notionResult = await notionManager.saveToNotion(parsedData);
+    console.log('Notion result:', notionResult);
 
     // 3. Reply to Line user
-    const replyMessage = notionPageUrl 
-      ? `訊息已分類並儲存到 Notion！\n${notionPageUrl}`
-      : '抱歉，未能成功分類您的訊息。';
+    let replyMessage;
+    
+    // 處理多項目回應
+    if (notionResult && typeof notionResult === 'object' && notionResult.summary) {
+      replyMessage = `${notionResult.summary}\n\n`;
+      
+      // 顯示處理結果詳情
+      if (notionResult.results && notionResult.results.length > 0) {
+        const successItems = notionResult.results.filter(r => r.status === 'created');
+        const existingItems = notionResult.results.filter(r => r.status === 'existed');
+        const errorItems = notionResult.results.filter(r => r.status === 'error');
+        
+        if (successItems.length > 0) {
+          replyMessage += `✅ 新增項目：\n`;
+          successItems.forEach(item => {
+            replyMessage += `• ${item.title}\n`;
+          });
+        }
+        
+        if (existingItems.length > 0) {
+          replyMessage += `\n🔄 已存在項目：\n`;
+          existingItems.forEach(item => {
+            replyMessage += `• ${item.title}\n`;
+          });
+        }
+        
+        if (errorItems.length > 0) {
+          replyMessage += `\n❌ 處理失敗：\n`;
+          errorItems.forEach(item => {
+            replyMessage += `• ${item.title}\n`;
+          });
+        }
+      }
+    } else {
+      // 處理單一項目回應
+      replyMessage = notionResult 
+        ? `訊息已分類並儲存到 Notion！\n${notionResult}`
+        : '抱歉，未能成功分類您的訊息。';
+    }
 
     return client.replyMessage(event.replyToken, {
       type: 'text',
