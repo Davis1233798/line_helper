@@ -9,7 +9,7 @@ const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 async function fetchWebsiteContent(url) {
   try {
     const response = await axios.get(url, {
-      timeout: 5000, // 縮短超時時間
+      timeout: 5000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
       }
@@ -26,34 +26,97 @@ async function fetchWebsiteContent(url) {
                   $('meta[property="og:title"]').attr('content') ||
                   url.replace('https://', '').replace('http://', '');
     
-    // 取得簡短描述
+    // 取得描述
     const description = $('meta[name="description"]').attr('content') ||
                        $('meta[property="og:description"]').attr('content') ||
                        $('p').first().text().trim() ||
-                       'AI 工具網站';
+                       '';
+    
+    // 取得更多內容用於分析
+    const contentText = $('main').text() || 
+                       $('article').text() || 
+                       $('.content').text() ||
+                       $('body').text();
+    
+    const rawContent = contentText.replace(/\s+/g, ' ').trim().substring(0, 800);
     
     return {
       title: title.substring(0, 100),
-      description: description.substring(0, 200)
+      description: description.substring(0, 300),
+      rawContent: rawContent
     };
   } catch (error) {
     console.error(`Error fetching ${url}:`, error.message);
     const siteName = url.replace('https://', '').replace('http://', '').split('/')[0];
-          return {
-        title: siteName,
-        description: 'AI 工具網站'
-      };
+    return {
+      title: siteName,
+      description: '',
+      rawContent: ''
+    };
   }
 }
 
-// 批量抓取網站內容
+// 使用 LLM 分析網站功能
+async function analyzeWebsiteFunction(url, title, description, rawContent) {
+  const prompt = `
+請分析這個網站的功能並提供繁體中文的詳細描述。請務必使用繁體中文回答。
+
+網站URL：${url}
+網站標題：${title}
+網站描述：${description}
+網站內容：${rawContent}
+
+請提供：
+1. 工具名稱（繁體中文）
+2. 主要功能（50-100字的繁體中文描述，說明這個工具的具體用途和特色）
+
+回傳格式：
+{
+  "title": "工具名稱",
+  "function": "詳細功能描述"
+}
+`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+    
+    let jsonString = text.replace(/```json\n|```/g, '').trim();
+    const analysis = JSON.parse(jsonString);
+    
+    return {
+      title: analysis.title || title,
+      description: analysis.function || 'AI 工具'
+    };
+  } catch (error) {
+    console.error(`分析網站功能失敗：${url}`, error);
+    return {
+      title: title,
+      description: 'AI 工具，協助提升工作效率'
+    };
+  }
+}
+
+// 批量抓取並分析網站內容
 async function fetchMultipleWebsiteContents(urls) {
-  const promises = urls.slice(0, 10).map(url => 
-    fetchWebsiteContent(url).catch(error => ({
-      title: url.replace('https://', '').replace('http://', ''),
-      description: 'AI 工具'
-    }))
-  );
+  const promises = urls.slice(0, 10).map(async (url) => {
+    try {
+      const websiteData = await fetchWebsiteContent(url);
+      const analysis = await analyzeWebsiteFunction(
+        url, 
+        websiteData.title, 
+        websiteData.description, 
+        websiteData.rawContent
+      );
+      return analysis;
+    } catch (error) {
+      return {
+        title: url.replace('https://', '').replace('http://', ''),
+        description: 'AI 工具，協助提升工作效率'
+      };
+    }
+  });
   
   return await Promise.all(promises);
 }
@@ -83,14 +146,22 @@ async function parseMultipleLinks(message, urls) {
     return url;
   });
   
-  console.log(`Processing ${fullUrls.length} URLs`);
+  console.log(`處理 ${fullUrls.length} 個網址`);
   
   const prompt = `
-分析文本中的 AI 工具連結，為每個連結提取簡要資訊。
-回傳 JSON 陣列格式：
-[{"url":"完整網址","title":"工具名稱","description":"功能描述"}]
+請分析以下文本中的 AI 工具連結，為每個連結提取繁體中文的資訊。請務必使用繁體中文回答。
 
-文本："""${message}"""
+請為每個連結從文本中提取：
+1. 工具的中文名稱或功能描述
+2. 工具的主要用途
+
+回傳 JSON 陣列格式：
+[{"url":"完整網址","title":"工具名稱","description":"從文本中提取的功能說明"}]
+
+文本內容：
+"""${message}"""
+
+請確保所有回答都使用繁體中文。
 `;
 
   try {
@@ -120,43 +191,43 @@ async function parseMultipleLinks(message, urls) {
       }
     }
     
-    // 批量抓取網站內容
-    const websiteContents = await fetchMultipleWebsiteContents(fullUrls);
+    // 批量分析網站內容
+    const websiteAnalysis = await fetchMultipleWebsiteContents(fullUrls);
     
     // 建立最終資料
     const enrichedData = fullUrls.map((url, index) => {
       const linkInfo = linkData.find(item => item.url === url) || {
         title: url.replace('https://', '').split('/')[0],
-        description: 'AI工具'
+        description: 'AI 工具'
       };
       
-      const websiteContent = websiteContents[index] || {
+      const websiteData = websiteAnalysis[index] || {
         title: linkInfo.title,
         description: linkInfo.description
       };
       
       return {
         category: "Link",
-        title: websiteContent.title || linkInfo.title,
-        content: `${linkInfo.description} - ${websiteContent.description}`,
+        title: websiteData.title || linkInfo.title,
+        content: websiteData.description || linkInfo.description,
         url: url,
         apiKey: "",
         documentInfo: ""
       };
     });
     
-    console.log(`Created ${enrichedData.length} items`);
+    console.log(`建立 ${enrichedData.length} 個項目`);
     return enrichedData;
   } catch (error) {
-    console.error('Error parsing links:', error);
+    console.error('解析連結時發生錯誤：', error);
     
     // 備用方案
-    const websiteContents = await fetchMultipleWebsiteContents(fullUrls);
+    const websiteAnalysis = await fetchMultipleWebsiteContents(fullUrls);
     
     const fallbackData = fullUrls.map((url, index) => ({
       category: "Link",
-      title: websiteContents[index]?.title || url.replace('https://', '').split('/')[0],
-             content: `AI 工具 - ${websiteContents[index]?.description || '實用工具'}`,
+      title: websiteAnalysis[index]?.title || url.replace('https://', '').split('/')[0],
+      content: websiteAnalysis[index]?.description || 'AI 工具，協助提升工作效率',
       url: url,
       apiKey: "",
       documentInfo: ""
@@ -203,10 +274,16 @@ async function parseSingleMessage(message) {
       parsedData.url = url;
       parsedData.category = "Link";
       
-      // 如果是單個連結，也抓取網站內容
-      const websiteContent = await fetchWebsiteContent(parsedData.url);
-      parsedData.title = websiteContent.title || parsedData.title;
-      parsedData.content = `${parsedData.content} - ${websiteContent.description}`;
+      // 如果是單個連結，分析網站內容
+      const websiteData = await fetchWebsiteContent(parsedData.url);
+      const analysis = await analyzeWebsiteFunction(
+        parsedData.url,
+        websiteData.title,
+        websiteData.description,
+        websiteData.rawContent
+      );
+      parsedData.title = analysis.title || parsedData.title;
+      parsedData.content = analysis.description;
     }
     
     return [parsedData]; // 返回陣列格式保持一致性
@@ -217,21 +294,27 @@ async function parseSingleMessage(message) {
     const urlMatch = message.match(/([a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\/[^\s]*)?)/g);
     const isUrl = urlMatch && urlMatch.length > 0;
     
-    let websiteContent = null;
+    let analysis = null;
     let url = '';
     if (isUrl) {
       url = urlMatch[0];
       if (!url.startsWith('http://') && !url.startsWith('https://')) {
         url = 'https://' + url;
       }
-      websiteContent = await fetchWebsiteContent(url);
+      const websiteData = await fetchWebsiteContent(url);
+      analysis = await analyzeWebsiteFunction(
+        url,
+        websiteData.title,
+        websiteData.description,
+        websiteData.rawContent
+      );
     }
     
     // Fallback to a default structure if LLM parsing fails
     return [{
       category: isUrl ? "Link" : "Other",
-      title: websiteContent ? websiteContent.title : message.substring(0, 50) + (message.length > 50 ? "..." : ""),
-      content: websiteContent ? `AI 工具 - ${websiteContent.description}` : message,
+      title: analysis ? analysis.title : message.substring(0, 50) + (message.length > 50 ? "..." : ""),
+      content: analysis ? analysis.description : message,
       url: isUrl ? url : "",
       apiKey: "",
       documentInfo: ""
