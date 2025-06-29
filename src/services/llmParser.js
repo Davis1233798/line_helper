@@ -232,17 +232,28 @@ async function analyzeWebsiteFunction(url, websiteData) {
     const response = result.response;
     let jsonString = response.text().replace(/```json\n|```/g, '').trim();
     const analysis = JSON.parse(jsonString);
-    if (!VALID_CATEGORIES.includes(analysis.category)) {
-      analysis.category = "其他";
+
+    // 【新增】驗證從 LLM 返回的物件結構
+    if (analysis && analysis.title && analysis.info && analysis.category) {
+        if (!VALID_CATEGORIES.includes(analysis.category)) {
+            analysis.category = "其他"; // 確保分類有效
+        }
+        return analysis; // 結構有效，直接返回
+    } else {
+        // 如果結構無效，拋出錯誤以觸發 catch 區塊的備用邏輯
+        throw new Error('LLM returned invalid JSON structure.');
     }
-    return analysis;
+
   } catch (error) {
-    console.error('Error analyzing website with LLM:', error);
+    console.error('分析網站時 LLM 處理失敗或回傳格式不符:', error.message);
+    console.log('啟用備用方案，從網頁標籤生成基本資訊。');
+    
+    // 備用方案：從網頁的 <title> 和 <meta> 標籤生成基本資訊
     return {
-      title: websiteData.title || url,
-      category: '其他',
+      title: websiteData.title || url.substring(url.lastIndexOf('/') + 1),
+      category: generateDefaultCategory(websiteData),
       tags: [],
-      info: websiteData.description || '無法生成介紹。'
+      info: generateDefaultInfo(websiteData.title, websiteData),
     };
   }
 }
