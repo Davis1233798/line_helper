@@ -14,8 +14,17 @@ const requiredEnvVars = [
   'LINE_CHANNEL_SECRET',
   'GEMINI_API_KEY',
   'NOTION_API_TOKEN',
-  'NOTION_DATABASE_ID'
+  'NOTION_DATABASE_ID',
+  'BASE_URL'
 ];
+
+// 檢查可選的環境變數
+const optionalEnvVars = ['GOOGLE_CALENDAR_ID', 'GOOGLE_CREDENTIALS_JSON'];
+const missingOptionalVars = optionalEnvVars.filter(varName => !process.env[varName]);
+if (missingOptionalVars.length > 0) {
+  console.warn('Missing optional environment variables:', missingOptionalVars);
+  console.warn('Some features may not work properly');
+}
 
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 if (missingVars.length > 0) {
@@ -442,8 +451,14 @@ async function handleEvent(event) {
     if (notionResult.success) {
       let replyMessage = `✅ 已成功儲存：${notionResult.title}\n${notionResult.url}`;
 
+      // 調試輸出：檢查 parsedInfo 結構
+      console.log('🔍 調試 - parsedInfo 結構:', JSON.stringify(parsedInfo, null, 2));
+      console.log('🔍 調試 - parsedInfo.events:', parsedInfo.events);
+      console.log('🔍 調試 - events 長度:', parsedInfo.events ? parsedInfo.events.length : 'undefined');
+
       // 【增強】處理日曆事件並產生連結 - 支援多種事件類型
       if (parsedInfo.events && parsedInfo.events.length > 0) {
+        console.log('📅 開始處理日曆事件...');
         replyMessage += '\n\n📅 發現重要日期：';
 
         // 批次新增到 Google Calendar
