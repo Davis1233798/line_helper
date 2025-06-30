@@ -193,6 +193,58 @@ app.post('/webhook-raw', express.raw({type: 'application/json'}), (req, res) => 
   }
 });
 
+// 處理日曆列表查詢
+async function handleCalendarListQuery(event) {
+  try {
+    console.log('📅 用戶請求查詢 Google Calendar 列表');
+    
+    const calendars = await googleCalendarManager.listCalendars();
+    
+    if (calendars.length === 0) {
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '❌ 無法取得日曆列表，請確認：\n1. Google Calendar API 憑證是否正確設定\n2. 服務帳號是否有存取權限\n3. GOOGLE_CREDENTIALS_JSON 環境變數是否設定正確',
+      });
+    }
+
+    let replyMessage = '📅 您的 Google Calendar 列表：\n\n';
+    
+    calendars.forEach((cal, index) => {
+      replyMessage += `${index + 1}. ${cal.name}\n`;
+      replyMessage += `   📧 ID: ${cal.id}\n`;
+      if (cal.primary) {
+        replyMessage += `   ⭐ 主要日曆\n`;
+      }
+      if (cal.description) {
+        replyMessage += `   📝 ${cal.description}\n`;
+      }
+      replyMessage += `   🔑 權限: ${cal.accessRole}\n\n`;
+    });
+
+    replyMessage += '💡 使用方式：\n';
+    replyMessage += '1. 複製您想要的日曆 ID\n';
+    replyMessage += '2. 在 Render 環境變數中設定 GOOGLE_CALENDAR_ID\n';
+    replyMessage += '3. 重新部署應用程式即可自動新增事件至該日曆';
+
+    // 檢查訊息長度
+    if (replyMessage.length > 5000) {
+      replyMessage = replyMessage.substring(0, 4950) + '\n...（列表過長，部分內容已省略）';
+    }
+
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: replyMessage,
+    });
+
+  } catch (error) {
+    console.error('處理日曆列表查詢時發生錯誤：', error);
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: '❌ 查詢日曆列表時發生錯誤，請稍後再試。\n\n如果問題持續發生，請檢查 Google Calendar API 設定。',
+    });
+  }
+}
+
 // 處理搜尋查詢
 async function handleSearchQuery(event, userMessage) {
   try {
@@ -340,6 +392,12 @@ async function handleEvent(event) {
       return;
     }
 
+    // 處理日曆管理指令
+    if (userMessage.includes('日曆') && (userMessage.includes('列表') || userMessage.includes('清單') || userMessage.includes('ID'))) {
+      await handleCalendarListQuery(event);
+      return;
+    }
+
     // 如果不是搜尋查詢，繼續進行解析和儲存
     const parsedInfo = await llmParser.parseMessage(userMessage);
 
@@ -357,32 +415,58 @@ async function handleEvent(event) {
     if (notionResult.success) {
       let replyMessage = `✅ 已成功儲存：${notionResult.title}\n${notionResult.url}`;
 
-      // 處理日曆事件並產生連結
+      // 【增強】處理日曆事件並產生連結 - 支援多種事件類型
       if (parsedInfo.events && parsedInfo.events.length > 0) {
         replyMessage += '\n\n📅 發現重要日期：';
 
+        // 批次新增到 Google Calendar
+        const googleBatchResults = await googleCalendarManager.addMultipleEvents(parsedInfo.events);
+
         for (const [index, calEvent] of parsedInfo.events.entries()) {
-          replyMessage += `\n\n${index + 1}. ${calEvent.title} - ${calEvent.description}`;
+          const eventTypeEmoji = {
+            'deadline': '⏰',
+            'registration': '📝',
+            'start': '🚀',
+            'end': '🏁',
+            'participation': '🎯',
+            'meeting': '👥',
+            'reminder': '🔔',
+            'event': '📅'
+          };
 
-          // 嘗試自動新增到 Google Calendar
-          const googleCalResult = await googleCalendarManager.addEventToCalendar(calEvent);
+          const emoji = eventTypeEmoji[calEvent.type] || '📅';
+          const googleResult = googleBatchResults[index];
+          
+          replyMessage += `\n\n${index + 1}. ${emoji} [${googleResult?.category || calEvent.type}] ${calEvent.title}`;
+          replyMessage += `\n   📅 ${calEvent.date.toLocaleString('zh-TW')}`;
+          
+          if (calEvent.description && calEvent.description !== calEvent.title) {
+            replyMessage += `\n   📝 ${calEvent.description.substring(0, 50)}${calEvent.description.length > 50 ? '...' : ''}`;
+          }
 
-          if (googleCalResult.success) {
-            replyMessage += `\n✅ 已自動新增至Google日曆`;
-            if (googleCalResult.url) {
-              replyMessage += `\n🔗 查看Google日曆: ${googleCalResult.url}`;
+          // Google Calendar 結果
+          if (googleResult?.success) {
+            replyMessage += `\n   ✅ 已自動新增至 Google 日曆`;
+            if (googleResult.url) {
+              replyMessage += `\n   🔗 查看: ${googleResult.url}`;
             }
           } else {
             // 自動新增失敗，提供手動連結
-            replyMessage += `\n⚠️  無法自動新增至Google日曆`;
+            replyMessage += `\n   ⚠️  Google 日曆: ${googleResult?.message || '新增失敗'}`;
             const googleLink = llmParser.generateGoogleCalendarLink(calEvent);
-            replyMessage += `\n🔗 手動新增Google日曆: ${googleLink}`;
+            replyMessage += `\n   🔗 手動新增: ${googleLink}`;
           }
 
           // 產生 Apple 日曆下載連結
           const eventId = `${Date.now()}-${index}`;
           const downloadUrl = `${process.env.BASE_URL || 'https://your-render-url.com'}/download-ics/${eventId}?title=${encodeURIComponent(calEvent.title)}&description=${encodeURIComponent(calEvent.description)}&date=${calEvent.date.toISOString()}`;
-          replyMessage += `\n🍎 下載Apple日曆: ${downloadUrl}`;
+          replyMessage += `\n   🍎 Apple 日曆: ${downloadUrl}`;
+        }
+
+        // 顯示批次處理統計
+        const successCount = googleBatchResults.filter(r => r.success).length;
+        if (parsedInfo.events.length > 1) {
+          replyMessage += `\n\n📊 批次處理結果: ${successCount}/${parsedInfo.events.length} 個事件成功新增至 Google 日曆`;
         }
       }
 
