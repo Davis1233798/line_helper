@@ -107,13 +107,16 @@ async function saveToNotion(data) {
     console.log("🎯 使用的標題欄位:", titleFieldName);
     console.log("📝 傳入的資料標題:", data.title);
 
-    if (titleFieldName && data.title) {
+    // 智慧設定標題：優先使用動態找到的欄位名，如果該屬性不存在，則回退到通用的 'title' 屬性
+    const titleValue = data[titleFieldName] || data.title;
+
+    if (titleFieldName && titleValue) {
       properties[titleFieldName] = {
-        title: [{ text: { content: data.title } }],
+        title: [{ text: { content: titleValue } }],
       };
-      console.log(`✅ 已設定標題屬性: ${titleFieldName} = "${data.title}"`);
+      console.log(`✅ 已設定標題屬性: ${titleFieldName} = "${titleValue}"`);
     } else {
-      console.log(`❌ 無法設定標題屬性 - titleFieldName: ${titleFieldName}, data.title: ${data.title}`);
+      console.log(`❌ 無法設定標題屬性 - titleFieldName: ${titleFieldName}, titleValue: ${titleValue}`);
     }
 
     // 尋找分類欄位（可能的名稱）

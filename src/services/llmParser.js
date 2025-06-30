@@ -182,90 +182,6 @@ const CATEGORY_TAGS = {
   "旅遊": ["旅遊規劃", "住宿預訂", "交通", "地圖"]
 };
 
-// 【增強】使用 LLM 提取日期和時間資訊，支援多種事件類型
-async function extractDateTimeInfo(websiteData) {
-  const content = `${websiteData.title}\n${websiteData.description}\n${websiteData.rawContent.substring(0, 15000)}`;
-  
-  const prompt = `
-    你是一個專門從文本中提取事件和日期的AI助理。請仔細閱讀以下網站內容，找出所有重要的日期和時間。
-    對於每一個找到的事件，請提供標題、事件類型、和精確的日期時間。
-    
-    事件類型分類：
-    - "deadline": 截止日期、申請截止、報名截止、最後期限
-    - "registration": 報名開始、註冊開放、申請開始、登記開始
-    - "start": 活動開始、開幕、啟動、上線、發布
-    - "end": 活動結束、閉幕、完成、下線
-    - "participation": 參加日期、出席日期、活動舉辦日
-    - "meeting": 會議、座談會、研討會、討論會
-    - "reminder": 提醒事項、重要通知
-    - "event": 其他一般事件
-    
-    規則：
-    1. 只回傳有效的、未來的日期。忽略過去的日期。
-    2. 如果年份不明確，請根據當前年份（${new Date().getFullYear()}）進行推斷。
-    3. 如果只提到日期但沒有時間，請根據事件類型設定合理時間：
-       - deadline: 23:59
-       - registration: 09:00
-       - start/meeting: 10:00
-       - end: 18:00
-       - participation: 14:00
-       - 其他: 12:00
-    4. 將提取的日期和時間轉換為 "YYYY-MM-DDTHH:mm:ss" 的 ISO 8601 格式。
-    5. 最終結果必須是 JSON 格式的陣列，格式為：
-       [{"title": "事件標題", "type": "事件類型", "iso_datetime": "YYYY-MM-DDTHH:mm:ss", "description": "詳細描述"}]
-    6. 如果沒有找到任何有效日期，請回傳一個空陣列 []。
-
-    網站內容如下：
-    """
-    ${content}
-    """
-  `;
-
-  try {
-    const response = await callLLMWithRetryLogic(prompt, isJsonResponseValid);
-    let jsonString = response.text().replace(/```json\n|```/g, '').trim();
-    
-    // 增加一個健全的 JSON 解析過程
-    if (!jsonString.startsWith('[')) {
-        jsonString = '[' + jsonString.substring(jsonString.indexOf('{'));
-    }
-    if (!jsonString.endsWith(']')) {
-        jsonString = jsonString.substring(0, jsonString.lastIndexOf('}') + 1) + ']';
-    }
-
-    const extractedEvents = JSON.parse(jsonString);
-    const events = [];
-
-    if (Array.isArray(extractedEvents)) {
-      for (const ev of extractedEvents) {
-        if (ev.title && ev.iso_datetime) {
-          const eventDate = new Date(ev.iso_datetime);
-          // 再次確認日期是有效的並且是未來的
-          if (!isNaN(eventDate.getTime()) && eventDate > new Date()) {
-            events.push({
-              type: ev.type || 'event', // 使用 LLM 判斷的事件類型
-              title: ev.title,
-              date: eventDate,
-              description: ev.description || `${ev.title}: ${eventDate.toLocaleString('zh-TW')}`
-            });
-          }
-        }
-      }
-    }
-    
-    console.log(`📅 從網站內容中提取到 ${events.length} 個事件`);
-    events.forEach(event => {
-      console.log(`  • [${event.type}] ${event.title} - ${event.date.toLocaleString('zh-TW')}`);
-    });
-    
-    return events;
-  } catch (error) {
-    console.error('使用 LLM 提取日期時發生錯誤:', error);
-    console.error('LLM 回傳的原始字串:', error.message.includes('JSON') ? jsonString : 'N/A');
-    return []; // 發生錯誤時回傳空陣列
-  }
-}
-
 // 生成 Google 行事曆連結
 function generateGoogleCalendarLink(event) {
   const baseUrl = 'https://calendar.google.com/calendar/render?action=TEMPLATE';
@@ -420,16 +336,21 @@ async function analyzeWebsiteFunction(url, websiteData) {
     2.  **分類 (category)**: 從以下列表中選擇一個最符合的分類：[${VALID_CATEGORIES.join(', ')}]。
     3.  **標籤 (tags)**: 根據內容生成5到8個相關的關鍵字標籤，以便於搜尋和分類。
     4.  **摘要 (info)**: 產生一段約100-150字的摘要，總結網站的核心內容。
-    5.  **事件 (events)**: 調用 extractDateTimeInfo 的能力來提取日期。如果內容中沒有明確的日期/事件，請回傳一個空陣列 []。
+    5.  **事件 (events)**: 找出所有重要的日期和時間。對於每一個找到的事件，請提供標題、事件類型、和精確的日期時間。
+        - 事件類型分類：deadline, registration, start, end, participation, meeting, reminder, event。
+        - 日期必須是未來的，並轉換為 "YYYY-MM-DDTHH:mm:ss" 的 ISO 8601 格式。
+        - 如果年份不明確，請根據當前年份（${new Date().getFullYear()}）推斷。
+        - 如果沒有找到任何有效日期，請回傳一個空陣列 []。
 
     你的輸出必須是嚴格的 JSON 格式，不包含任何額外的解釋或註釋。格式如下：
 
     {
       "title": "網站主標題",
       "category": "選擇的分類",
-      "tags": ["標籤1", "標籤2", "標籤3", ...],
+      "tags": ["標籤1", "標籤2", ...],
       "info": "網站內容摘要...",
-      "url": "${url}"
+      "url": "${url}",
+      "events": [{"type": "事件類型", "title": "事件標題", "date": "YYYY-MM-DDTHH:mm:ss", "description": "詳細描述"}, ...]
     }
 
     網站內容如下：
@@ -439,14 +360,29 @@ async function analyzeWebsiteFunction(url, websiteData) {
   `;
 
   try {
-    console.log(`🚀 開始分析網站: ${url}`);
+    console.log(`🚀 開始分析網站 (單次調用): ${url}`);
     const response = await callLLMWithRetryLogic(prompt, isAnalysisResponseValid);
     let jsonString = response.text().replace(/```json\n?|```/g, '').trim();
     const result = JSON.parse(jsonString);
 
-    // 從網站中提取事件
-    const events = await extractDateTimeInfo(websiteData);
-    result.events = events;
+    // 將 result.events 中的 date 字串轉換為 Date 物件
+    if (result.events && Array.isArray(result.events)) {
+      result.events = result.events.map(event => {
+        if (event.date && typeof event.date === 'string') {
+          const eventDate = new Date(event.date);
+          if (!isNaN(eventDate.getTime())) {
+            return { ...event, date: eventDate };
+          }
+        }
+        return null; // 如果日期無效，則過濾掉
+      }).filter(Boolean); // 移除 null
+      
+      console.log(`📅 從網站內容中提取到 ${result.events.length} 個事件`);
+      result.events.forEach(event => {
+        console.log(`  • [${event.type}] ${event.title} - ${event.date.toLocaleString('zh-TW')}`);
+      });
+    }
+
 
     console.log(`✅ 成功分析網站: ${result.title}`);
     return result;
