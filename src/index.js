@@ -508,8 +508,8 @@ async function handleEvent(event) {
 
         // 顯示批次處理統計
         const successCount = googleBatchResults.filter(r => r.success).length;
-        if (parsedInfo.events.length > 1) {
-          replyMessage += `\n\n📊 批次處理結果: ${successCount}/${parsedInfo.events.length} 個事件成功新增至 Google 日曆`;
+        if (firstItem.events.length > 1) {
+          replyMessage += `\n\n📊 批次處理結果: ${successCount}/${firstItem.events.length} 個事件成功新增至 Google 日曆`;
         }
       }
 
