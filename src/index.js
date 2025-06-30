@@ -4,6 +4,7 @@ const line = require('@line/bot-sdk');
 const llmParser = require('./services/llmParser');
 const notionManager = require('./services/notionManager');
 const googleCalendarManager = require('./services/googleCalendarManager');
+const { shortenUrl } = require('./services/urlShortener');
 const http = require('http'); // 用於健康檢查
 const { exec } = require('child_process'); // 用於網路偵測
 const os = require('os');
@@ -419,18 +420,40 @@ async function handleEvent(event) {
       });
     }
 
-    let notionResult = await notionManager.saveToNotion(parsedInfo);
+    // 修正：parsedInfo 是陣列，需要取第一個元素
+    const firstItem = Array.isArray(parsedInfo) ? parsedInfo[0] : parsedInfo;
+    console.log('🔍 準備儲存到 Notion 的資料:', JSON.stringify(firstItem, null, 2));
+    
+    // 縮短 URL（如果需要）
+    if (firstItem.url && firstItem.url.length > 100) {
+      console.log('🔗 URL 過長，開始縮短...');
+      const shortUrl = await shortenUrl(firstItem.url);
+      if (shortUrl !== firstItem.url) {
+        console.log(`✅ URL 縮短成功: ${firstItem.url.substring(0, 50)}... -> ${shortUrl}`);
+        firstItem.url = shortUrl;
+      } else {
+        console.log('⚠️  URL 縮短失敗，使用原始 URL');
+      }
+    }
+    
+    let notionResult = await notionManager.saveToNotion(firstItem);
 
     // 如果 Notion 儲存失敗，嘗試降級處理
-    if (!notionResult.success && parsedInfo) {
+    if (!notionResult.success && firstItem) {
       console.log('🔄 Notion 儲存失敗，嘗試降級處理...');
       
       // 嘗試簡化資料格式重新儲存
+      let simplifiedUrl = firstItem.url;
+      if (simplifiedUrl && simplifiedUrl.length > 100) {
+        console.log('🔗 降級處理中縮短 URL...');
+        simplifiedUrl = await shortenUrl(simplifiedUrl);
+      }
+      
       const simplifiedData = {
-        title: parsedInfo.title || parsedInfo.url || '未知標題',
-        category: parsedInfo.category || '其他',
-        info: parsedInfo.info || '自動分析的內容',
-        url: parsedInfo.url
+        title: firstItem.title || firstItem.url || '未知標題',
+        category: firstItem.category || '其他',
+        info: firstItem.info || '自動分析的內容',
+        url: simplifiedUrl
       };
       
       console.log('📝 使用簡化資料重新嘗試:', JSON.stringify(simplifiedData, null, 2));
@@ -491,19 +514,22 @@ async function handleEvent(event) {
           if (googleResult?.success) {
             replyMessage += `\n   ✅ 已自動新增至 Google 日曆`;
             if (googleResult.url) {
-              replyMessage += `\n   🔗 查看: ${googleResult.url}`;
+              const shortGoogleUrl = await shortenUrl(googleResult.url);
+              replyMessage += `\n   🔗 查看: ${shortGoogleUrl}`;
             }
           } else {
             // 自動新增失敗，提供手動連結
             replyMessage += `\n   ⚠️  Google 日曆: ${googleResult?.message || '新增失敗'}`;
             const googleLink = llmParser.generateGoogleCalendarLink(calEvent);
-            replyMessage += `\n   🔗 手動新增: ${googleLink}`;
+            const shortGoogleLink = await shortenUrl(googleLink);
+            replyMessage += `\n   🔗 手動新增: ${shortGoogleLink}`;
           }
 
           // 產生 Apple 日曆下載連結
           const eventId = `${Date.now()}-${index}`;
           const downloadUrl = `${process.env.BASE_URL || 'https://line-helper.onrender.com'}/download-ics/${eventId}?title=${encodeURIComponent(calEvent.title)}&description=${encodeURIComponent(calEvent.description)}&date=${calEvent.date.toISOString()}`;
-          replyMessage += `\n   🍎 Apple 日曆: ${downloadUrl}`;
+          const shortDownloadUrl = await shortenUrl(downloadUrl);
+          replyMessage += `\n   🍎 Apple 日曆: ${shortDownloadUrl}`;
         }
 
         // 顯示批次處理統計
@@ -529,13 +555,13 @@ async function handleEvent(event) {
       let replyMessage = `⚠️ 儲存到 Notion 失敗，但已處理其他功能\n錯誤：${notionResult.error}`;
 
       // 處理日曆事件（即使 Notion 失敗）
-      if (parsedInfo && parsedInfo.events && parsedInfo.events.length > 0) {
+      if (firstItem && firstItem.events && firstItem.events.length > 0) {
         replyMessage += '\n\n📅 發現重要日期：';
 
         // 批次新增到 Google Calendar
-        const googleBatchResults = await googleCalendarManager.addMultipleEvents(parsedInfo.events);
+        const googleBatchResults = await googleCalendarManager.addMultipleEvents(firstItem.events);
 
-        for (const [index, calEvent] of parsedInfo.events.entries()) {
+        for (const [index, calEvent] of firstItem.events.entries()) {
           const eventTypeEmoji = {
             'deadline': '⏰',
             'registration': '📝',

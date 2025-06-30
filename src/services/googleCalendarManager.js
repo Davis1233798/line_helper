@@ -10,7 +10,7 @@ let auth;
 
 // 優先順序：1. Render Secret Files 2. 本地開發檔案
 const SECRET_FILE_PATH = '/etc/secrets/strange-bloom-382507-11b0f2d5a164.json';
-const LOCAL_FILE_PATH = path.join(__dirname, '../../google-credentials.json');
+const LOCAL_FILE_PATH = path.join(__dirname, '../google-credentials.json');
 
 console.log('🔑 開始 Google Calendar 認證流程');
 
@@ -45,6 +45,7 @@ if (fs.existsSync(SECRET_FILE_PATH)) {
   console.error('🔍 檢查路徑:');
   console.error('   - Render Secret File:', SECRET_FILE_PATH);
   console.error('   - 本地開發檔案:', LOCAL_FILE_PATH);
+  console.error('🔧 請確認 Render Secret Files 中的檔案名稱是否正確');
   auth = null;
 }
 
