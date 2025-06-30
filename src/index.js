@@ -657,6 +657,18 @@ app.listen(port, '0.0.0.0', () => {
   });
   notionManager.getNotionData(); // 啟動時獲取 Notion 資料庫數據
   checkInternetConnection(); // 啟動時檢查網路連線
+  
+  // 診斷 Google Calendar 配置
+  if (process.env.GOOGLE_CALENDAR_ID) {
+    console.log('\n🔍 執行 Google Calendar 配置診斷...');
+    try {
+      await googleCalendarManager.diagnoseGoogleCalendar();
+    } catch (error) {
+      console.error('Google Calendar 診斷失敗:', error.message);
+    }
+  } else {
+    console.log('\n⚠️  未設定 GOOGLE_CALENDAR_ID，跳過 Google Calendar 診斷');
+  }
 });
 
 module.exports = app;
