@@ -453,18 +453,19 @@ async function handleEvent(event) {
 
       // 調試輸出：檢查 parsedInfo 結構
       console.log('🔍 調試 - parsedInfo 結構:', JSON.stringify(parsedInfo, null, 2));
-      console.log('🔍 調試 - parsedInfo.events:', parsedInfo.events);
-      console.log('🔍 調試 - events 長度:', parsedInfo.events ? parsedInfo.events.length : 'undefined');
+      const firstItem = Array.isArray(parsedInfo) ? parsedInfo[0] : parsedInfo;
+      console.log('🔍 調試 - firstItem.events:', firstItem.events);
+      console.log('🔍 調試 - events 長度:', firstItem.events ? firstItem.events.length : 'undefined');
 
       // 【增強】處理日曆事件並產生連結 - 支援多種事件類型
-      if (parsedInfo.events && parsedInfo.events.length > 0) {
+      if (firstItem.events && firstItem.events.length > 0) {
         console.log('📅 開始處理日曆事件...');
         replyMessage += '\n\n📅 發現重要日期：';
 
         // 批次新增到 Google Calendar
-        const googleBatchResults = await googleCalendarManager.addMultipleEvents(parsedInfo.events);
+        const googleBatchResults = await googleCalendarManager.addMultipleEvents(firstItem.events);
 
-        for (const [index, calEvent] of parsedInfo.events.entries()) {
+        for (const [index, calEvent] of firstItem.events.entries()) {
           const eventTypeEmoji = {
             'deadline': '⏰',
             'registration': '📝',
