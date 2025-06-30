@@ -396,9 +396,13 @@ async function analyzeWebsiteFunction(url, websiteData) {
 // 批次分析多個網站功能 (8個一組)
 async function analyzeBatchWebsiteFunctions(websiteDataList) {
   const prompt = `
-    你是一個網站分析工具。請為以下每個網站生成摘要、分類和標籤。
-    以繁體中文回傳一個 JSON 陣列，每個物件包含 "title", "category", "tags", "info"。
+    你是一個網站分析工具。請為以下每個網站生成摘要、分類、標籤和事件。
+    以繁體中文回傳一個 JSON 陣列，每個物件必須包含 "url", "title", "category", "tags", "info", 和 "events"。
+    - "events" 是一個物件陣列，包含 "type", "title", "date", "description"。每個事件物件都必須有這些欄位。
+    - 日期必須是未來的，並轉換為 "YYYY-MM-DDTHH:mm:ss" 的 ISO 8601 格式。
+    - 如果沒有找到任何有效日期，請為 "events" 欄位回傳一個空陣列 []。
     可用類別：${VALID_CATEGORIES.join(', ')}。
+
     網站列表：
     ${websiteDataList.map((data, index) => `${index + 1}. URL: ${data.url}\n   Title: ${data.title}\n   Content: ${data.rawContent.substring(0, 2000)}`).join('\n\n')}
   `;
@@ -478,28 +482,31 @@ async function parseSingleMessage(message, urls) {
     return [{ title: url, info: "無法讀取網站內容", url: url, category: "其他", tags: [], events: [] }];
   }
   const analysisResult = await analyzeWebsiteFunction(url, websiteData);
-  const calendarEvents = await extractDateTimeInfo(websiteData);
-  return [{ ...analysisResult, url: url, events: calendarEvents }];
+  // 事件現在由 analyzeWebsiteFunction 直接回傳，不再需要獨立呼叫
+  return [analysisResult];
 }
 
 // 處理多個連結
 async function parseMultipleLinks(message, urls) {
   try {
-    const websiteAnalysis = await module.exports.fetchMultipleWebsiteContents(urls);
-    const enrichedData = await Promise.all(urls.map(async (url, index) => {
-      const analysis = websiteAnalysis[index] || {};
-      const websiteData = { rawContent: analysis.info || "", title: analysis.title || "", description: ""};
-      const calendarEvents = await extractDateTimeInfo(websiteData);
-      
-      return {
-        category: analysis.category || "其他",
-        tags: analysis.tags || [],
-        title: analysis.title || url.replace(/^https?:\/\//, '').split('/')[0],
-        info: analysis.info || '無法生成摘要。',
-        url: url,
-        events: calendarEvents
-      };
-    }));
+    const websiteAnalysis = await fetchMultipleWebsiteContents(urls);
+    
+    // 對每個結果中的日期字串進行處理
+    const enrichedData = websiteAnalysis.map(analysis => {
+      if (analysis.events && Array.isArray(analysis.events)) {
+        analysis.events = analysis.events.map(event => {
+          if (event.date && typeof event.date === 'string') {
+            const eventDate = new Date(event.date);
+            if (!isNaN(eventDate.getTime())) {
+              return { ...event, date: eventDate };
+            }
+          }
+          return null;
+        }).filter(Boolean); // 過濾掉無效的事件
+      }
+      return analysis;
+    });
+
     console.log(`建立 ${enrichedData.length} 個項目`);
     return enrichedData;
   } catch (error) {
