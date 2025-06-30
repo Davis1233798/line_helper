@@ -576,5 +576,4 @@ module.exports = {
   analyzeWebsiteFunction,
   analyzeBatchWebsiteFunctions,
   generateGoogleCalendarLink,
-  getWebsiteData,
 };
