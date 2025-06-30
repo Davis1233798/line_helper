@@ -79,25 +79,32 @@ async function saveToNotion(data) {
     const database = await notion.databases.retrieve({ database_id: databaseId });
     const properties = {};
     
-    const titleFieldNames = ['Name', 'Title', '標題', '名稱', 'name', 'title', 'ttitle'];
+    // 更完整的標題欄位名稱列表
+    const titleFieldNames = ['Name', 'Title', '標題', '名稱', 'name', 'title', 'ttitle', 'Title/Name'];
     let titleFieldName = null;
     
+    // 首先嘗試常見的標題欄位名稱
     for (const fieldName of titleFieldNames) {
       if (database.properties[fieldName] && database.properties[fieldName].type === 'title') {
         titleFieldName = fieldName;
+        console.log(`✅ 找到標題欄位: ${fieldName}`);
         break;
       }
     }
     
+    // 如果沒找到，遍歷所有屬性找 title 類型
     if (!titleFieldName) {
       for (const [fieldName, property] of Object.entries(database.properties)) {
         if (property.type === 'title') {
           titleFieldName = fieldName;
+          console.log(`✅ 找到標題欄位 (自動偵測): ${fieldName}`);
           break;
         }
       }
     }
-    console.log("找到的標題欄位:", titleFieldName);
+    
+    console.log("📋 資料庫所有欄位:", Object.keys(database.properties));
+    console.log("🎯 使用的標題欄位:", titleFieldName);
 
     if (titleFieldName && data.title) {
       properties[titleFieldName] = {
@@ -106,8 +113,21 @@ async function saveToNotion(data) {
       console.log("已設定標題屬性。");
     }
 
-    const categoryFieldName = 'Category';
-    if (database.properties[categoryFieldName] && data.category) {
+    // 尋找分類欄位（可能的名稱）
+    const categoryFieldNames = ['Category', 'category', '分類', 'Tags', 'Type'];
+    let categoryFieldName = null;
+    
+    for (const fieldName of categoryFieldNames) {
+      if (database.properties[fieldName] && 
+          (database.properties[fieldName].type === 'multi_select' || 
+           database.properties[fieldName].type === 'select')) {
+        categoryFieldName = fieldName;
+        console.log(`✅ 找到分類欄位: ${fieldName} (${database.properties[fieldName].type})`);
+        break;
+      }
+    }
+    
+    if (categoryFieldName && data.category) {
         if (database.properties[categoryFieldName].type === 'multi_select') {
             const categoryTags = [{ name: data.category }];
             if (data.tags && Array.isArray(data.tags)) {
@@ -117,29 +137,58 @@ async function saveToNotion(data) {
         } else if (database.properties[categoryFieldName].type === 'select') {
             properties[categoryFieldName] = { select: { name: data.category } };
         }
-        console.log("已設定分類屬性。");
+        console.log(`✅ 已設定分類屬性: ${categoryFieldName}`);
     }
     
-    const infoFieldName = 'info'; // 從日誌得知是小寫
-    if (database.properties[infoFieldName] && data.info) {
-        properties[infoFieldName] = { rich_text: [{ text: { content: data.info } }] };
-        console.log("已設定 info 屬性。");
+    // 尋找資訊/描述欄位
+    const infoFieldNames = ['info', 'Info', 'Description', 'description', '描述', '資訊', 'Content'];
+    let infoFieldName = null;
+    
+    for (const fieldName of infoFieldNames) {
+      if (database.properties[fieldName] && database.properties[fieldName].type === 'rich_text') {
+        infoFieldName = fieldName;
+        console.log(`✅ 找到資訊欄位: ${fieldName}`);
+        break;
+      }
+    }
+    
+    if (infoFieldName && data.info) {
+        properties[infoFieldName] = { rich_text: [{ text: { content: data.info.substring(0, 2000) } }] };
+        console.log(`✅ 已設定資訊屬性: ${infoFieldName}`);
     }
 
-    const urlFieldName = 'URL';
-    if (database.properties[urlFieldName] && data.url) {
+    // 尋找 URL 欄位
+    const urlFieldNames = ['URL', 'url', 'Link', 'link', '連結', '網址'];
+    let urlFieldName = null;
+    
+    for (const fieldName of urlFieldNames) {
+      if (database.properties[fieldName] && 
+          (database.properties[fieldName].type === 'url' || database.properties[fieldName].type === 'rich_text')) {
+        urlFieldName = fieldName;
+        console.log(`✅ 找到 URL 欄位: ${fieldName} (${database.properties[fieldName].type})`);
+        break;
+      }
+    }
+    
+    if (urlFieldName && data.url) {
         if (database.properties[urlFieldName].type === 'url') {
             properties[urlFieldName] = { url: data.url };
         } else if (database.properties[urlFieldName].type === 'rich_text') {
             properties[urlFieldName] = { rich_text: [{ text: { content: data.url } }] };
         }
-        console.log("已設定 URL 屬性。");
+        console.log(`✅ 已設定 URL 屬性: ${urlFieldName}`);
     }
     
-    const contentFieldName = 'Content';
-    if (database.properties[contentFieldName] && data.content) {
-        properties[contentFieldName] = { rich_text: [{ text: { content: data.content.substring(0, 2000) } }] };
-        console.log("已設定 Content 屬性。");
+    // 如果有額外的內容欄位
+    if (data.content && !infoFieldName) {
+        const contentFieldNames = ['Content', 'content', '內容', 'Details'];
+        for (const fieldName of contentFieldNames) {
+          if (database.properties[fieldName] && database.properties[fieldName].type === 'rich_text') {
+            properties[fieldName] = { rich_text: [{ text: { content: data.content.substring(0, 2000) } }] };
+            console.log(`✅ 已設定內容屬性: ${fieldName}`);
+            break;
+          }
+        }
     }
 
     console.log("最終準備建立的頁面屬性:", JSON.stringify(Object.keys(properties)));

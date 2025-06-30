@@ -526,7 +526,8 @@ function checkInternetConnection() {
 const port = process.env.PORT || 3000;
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server is running on port ${port}`);
-  console.log(`Webhook URL: ${process.env.BASE_URL || 'https://line-helper.onrender.com'}/webhook`);
+  const baseUrl = process.env.BASE_URL || 'https://line-helper.onrender.com';
+  console.log(`Webhook URL: ${baseUrl}/webhook`);
   console.log('Environment check:', {
     hasLineToken: !!process.env.LINE_CHANNEL_ACCESS_TOKEN,
     hasLineSecret: !!process.env.LINE_CHANNEL_SECRET,

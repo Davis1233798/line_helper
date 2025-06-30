@@ -29,45 +29,52 @@ function switchToNextApiKey() {
     return false;
   }
   
+  const oldIndex = currentKeyIndex;
   currentKeyIndex = (currentKeyIndex + 1) % GEMINI_KEYS.length;
   genAI = new GoogleGenerativeAI(GEMINI_KEYS[currentKeyIndex]);
   model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
   
-  console.log(`🔄 切換至 API Key #${currentKeyIndex + 1}`);
+  console.log(`🔄 從 API Key #${oldIndex + 1} 切換至 API Key #${currentKeyIndex + 1}`);
+  console.log(`🔑 當前使用的 API Key: ${GEMINI_KEYS[currentKeyIndex].substring(0, 10)}...`);
   return true;
 }
 
 // 帶有故障轉移的 API 調用
 async function callGeminiWithFailover(prompt, maxRetries = GEMINI_KEYS.length) {
   let lastError;
+  let allKeysFailed = true;
+  
+  console.log(`🚀 開始 Gemini API 調用，使用 Key #${currentKeyIndex + 1}/${GEMINI_KEYS.length}`);
   
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       const result = await model.generateContent(prompt);
       const response = result.response;
       
-      // 如果成功，重置回第一個 Key（可選）
-      if (currentKeyIndex !== 0) {
-        console.log(`✅ API Key #${currentKeyIndex + 1} 調用成功`);
+      // 成功調用
+      allKeysFailed = false;
+      if (currentKeyIndex !== 0 || attempt > 0) {
+        console.log(`✅ API Key #${currentKeyIndex + 1} 調用成功 (嘗試 ${attempt + 1}/${maxRetries})`);
       }
       
       return response;
     } catch (error) {
       lastError = error;
-      console.error(`❌ API Key #${currentKeyIndex + 1} 調用失敗:`, error.message);
+      console.error(`❌ API Key #${currentKeyIndex + 1} 調用失敗 (嘗試 ${attempt + 1}/${maxRetries}):`, error.message);
       
-      // 如果是配額或認證錯誤，切換到下一個 Key
-      if (error.message.includes('quota') || 
-          error.message.includes('API key') || 
-          error.message.includes('rate limit') ||
-          error.message.includes('permission')) {
-        
-        if (attempt < maxRetries - 1) {
-          const switched = switchToNextApiKey();
-          if (switched) {
-            console.log(`🔄 正在重試 API 調用...`);
-            continue;
-          }
+      // 檢查是否是配額或認證錯誤
+      const isQuotaError = error.message.includes('quota') || 
+                          error.message.includes('API key') || 
+                          error.message.includes('rate limit') ||
+                          error.message.includes('permission') ||
+                          error.message.includes('429') ||
+                          error.message.includes('403');
+      
+      if (isQuotaError && attempt < maxRetries - 1) {
+        const switched = switchToNextApiKey();
+        if (switched) {
+          console.log(`🔄 正在重試 API 調用...`);
+          continue;
         }
       }
       
@@ -81,7 +88,13 @@ async function callGeminiWithFailover(prompt, maxRetries = GEMINI_KEYS.length) {
     }
   }
   
-  throw new Error(`所有 API Key 都失敗了。最後錯誤: ${lastError.message}`);
+  // 所有 API Key 都失敗了
+  if (allKeysFailed) {
+    console.error('🚨 所有 Gemini API Key 都失敗！考慮切換到更低階模型或檢查配額');
+    console.error('💡 建議：1. 檢查 API Key 配額 2. 等待配額重置 3. 添加更多 API Key');
+  }
+  
+  throw new Error(`所有 ${GEMINI_KEYS.length} 個 API Key 都失敗了。最後錯誤: ${lastError.message}`);
 }
 
 function extractUrls(message) {
