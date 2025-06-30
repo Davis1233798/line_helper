@@ -459,7 +459,7 @@ async function handleEvent(event) {
 
           // 產生 Apple 日曆下載連結
           const eventId = `${Date.now()}-${index}`;
-          const downloadUrl = `${process.env.BASE_URL || 'https://your-render-url.com'}/download-ics/${eventId}?title=${encodeURIComponent(calEvent.title)}&description=${encodeURIComponent(calEvent.description)}&date=${calEvent.date.toISOString()}`;
+          const downloadUrl = `${process.env.BASE_URL || 'https://line-helper.onrender.com'}/download-ics/${eventId}?title=${encodeURIComponent(calEvent.title)}&description=${encodeURIComponent(calEvent.description)}&date=${calEvent.date.toISOString()}`;
           replyMessage += `\n   🍎 Apple 日曆: ${downloadUrl}`;
         }
 
@@ -526,7 +526,7 @@ function checkInternetConnection() {
 const port = process.env.PORT || 3000;
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server is running on port ${port}`);
-  console.log(`Webhook URL: https://your-render-url.com/webhook`);
+  console.log(`Webhook URL: ${process.env.BASE_URL || 'https://line-helper.onrender.com'}/webhook`);
   console.log('Environment check:', {
     hasLineToken: !!process.env.LINE_CHANNEL_ACCESS_TOKEN,
     hasLineSecret: !!process.env.LINE_CHANNEL_SECRET,
