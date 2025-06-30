@@ -11,90 +11,141 @@ const GEMINI_KEYS = [
   process.env.GEMINI_API_KEY_3
 ].filter(key => key && key.trim() !== ''); // 移除空值
 
+const MODELS = [
+  "gemini-2.5-pro",
+  "gemini-1.5-pro",
+  "gemini-2.5-flash",
+  "gemini-1.5-flash"
+].filter(m => m); // 過濾掉可能的空值
+
 if (GEMINI_KEYS.length === 0) {
-  console.error('錯誤：沒有找到有效的 GEMINI_API_KEY');
+  console.error('錯誤：沒有找到任何有效的 GEMINI_API_KEY，請檢查 .env 檔案。');
   process.exit(1);
 }
 
+console.log(`🔑 成功載入 ${GEMINI_KEYS.length} 個 Gemini API Key`);
+console.log(`🧠 可用模型序列: ${MODELS.join(' -> ')}`);
+
 let currentKeyIndex = 0;
-let genAI = new GoogleGenerativeAI(GEMINI_KEYS[currentKeyIndex]);
-let model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+let currentModelIndex = 0;
+let genAI;
+let model;
 
-console.log(`🔑 載入了 ${GEMINI_KEYS.length} 個 Gemini API Key`);
-
-// 切換到下一個 API Key
-function switchToNextApiKey() {
-  if (GEMINI_KEYS.length <= 1) {
-    console.warn('⚠️  只有一個 API Key，無法進行故障轉移');
-    return false;
+function updateAIClient() {
+  if (currentKeyIndex >= GEMINI_KEYS.length || currentModelIndex >= MODELS.length) {
+    console.error("錯誤：金鑰或模型索引超出範圍。");
+    return;
   }
-  
-  const oldIndex = currentKeyIndex;
-  currentKeyIndex = (currentKeyIndex + 1) % GEMINI_KEYS.length;
-  genAI = new GoogleGenerativeAI(GEMINI_KEYS[currentKeyIndex]);
-  model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-  
-  console.log(`🔄 從 API Key #${oldIndex + 1} 切換至 API Key #${currentKeyIndex + 1}`);
-  console.log(`🔑 當前使用的 API Key: ${GEMINI_KEYS[currentKeyIndex].substring(0, 10)}...`);
-  return true;
+  const key = GEMINI_KEYS[currentKeyIndex];
+  const modelName = MODELS[currentModelIndex];
+  try {
+    genAI = new GoogleGenerativeAI(key);
+    model = genAI.getGenerativeModel({ model: modelName });
+    console.log(`🔄 AI 客戶端已更新 | 模型: ${modelName} | Key: #${currentKeyIndex + 1}`);
+  } catch (error) {
+    console.error(`初始化 GoogleGenerativeAI 失敗 (Key #${currentKeyIndex + 1})`, error);
+  }
 }
 
-// 帶有故障轉移的 API 調用
-async function callGeminiWithFailover(prompt, maxRetries = GEMINI_KEYS.length) {
-  let lastError;
-  let allKeysFailed = true;
-  
-  console.log(`🚀 開始 Gemini API 調用，使用 Key #${currentKeyIndex + 1}/${GEMINI_KEYS.length}`);
-  
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const result = await model.generateContent(prompt);
-      const response = result.response;
-      
-      // 成功調用
-      allKeysFailed = false;
-      if (currentKeyIndex !== 0 || attempt > 0) {
-        console.log(`✅ API Key #${currentKeyIndex + 1} 調用成功 (嘗試 ${attempt + 1}/${maxRetries})`);
-      }
-      
-      return response;
-    } catch (error) {
-      lastError = error;
-      console.error(`❌ API Key #${currentKeyIndex + 1} 調用失敗 (嘗試 ${attempt + 1}/${maxRetries}):`, error.message);
-      
-      // 檢查是否是配額或認證錯誤
-      const isQuotaError = error.message.includes('quota') || 
-                          error.message.includes('API key') || 
-                          error.message.includes('rate limit') ||
-                          error.message.includes('permission') ||
-                          error.message.includes('429') ||
-                          error.message.includes('403');
-      
-      if (isQuotaError && attempt < maxRetries - 1) {
-        const switched = switchToNextApiKey();
-        if (switched) {
-          console.log(`🔄 正在重試 API 調用...`);
-          continue;
+// 初始化
+updateAIClient();
+
+function switchToNextApiKey() {
+  currentKeyIndex = (currentKeyIndex + 1) % GEMINI_KEYS.length;
+  console.log(`🔑 切換至 API Key #${currentKeyIndex + 1}/${GEMINI_KEYS.length}`);
+  updateAIClient();
+  // 如果key輪換了一圈，返回true，提示模型也該切換了
+  return currentKeyIndex === 0;
+}
+
+function switchToNextModel() {
+  currentModelIndex = (currentModelIndex + 1) % MODELS.length;
+  console.log(`🧠 切換至模型 #${currentModelIndex + 1}/${MODELS.length}: ${MODELS[currentModelIndex]}`);
+  currentKeyIndex = 0; // 重設金鑰索引
+  console.log(`🔑 金鑰重設至 #1`);
+  updateAIClient();
+  return currentModelIndex === 0; // 如果模型也輪換了一圈，返回true
+}
+
+
+// 2. 核心重試函式
+/**
+ * 使用多金鑰、多模型策略呼叫 LLM，並包含回應驗證。
+ * @param {string} prompt - 傳給 LLM 的提示。
+ * @param {function(string): boolean} isResponseValid - 驗證 LLM 回應是否有效的函式。
+ * @param {number} maxModelCycles - 模型最大循環次數。
+ * @returns {Promise<import('@google/generative-ai').EnhancedGenerateContentResponse>}
+ */
+async function callLLMWithRetryLogic(prompt, isResponseValid, maxModelCycles = 1) {
+    let lastError = null;
+
+    for (let cycle = 0; cycle < maxModelCycles; cycle++) {
+        for (let modelIdx = 0; modelIdx < MODELS.length; modelIdx++) {
+            for (let keyIdx = 0; keyIdx < GEMINI_KEYS.length; keyIdx++) {
+                const modelName = MODELS[currentModelIndex];
+                const keyIndex = currentKeyIndex;
+
+                console.log(`🚀 開始 LLM 調用 | 模型: ${modelName} (#${currentModelIndex + 1}/${MODELS.length}) | Key: #${keyIndex + 1}/${GEMINI_KEYS.length}`);
+
+                try {
+                    const result = await model.generateContent(prompt);
+                    const response = result.response;
+                    const responseText = response.text();
+
+                    if (isResponseValid(responseText)) {
+                        console.log(`✅ 調用成功並通過驗證 | 模型: ${modelName}, Key: #${keyIndex + 1}`);
+                        return response;
+                    } else {
+                        lastError = new Error("回應內容無效或不完整");
+                        console.warn(`⚠️  調用成功但未通過驗證 | 模型: ${modelName}, Key: #${keyIndex + 1}`);
+                        console.warn(`   L 回應內容: ${responseText.substring(0, 100)}...`);
+                    }
+                } catch (error) {
+                    lastError = error;
+                    console.error(`❌ LLM 調用失敗 | 模型: ${modelName}, Key: #${keyIndex + 1} | 錯誤: ${error.message}`);
+                    const isQuotaError = error.message.includes('quota') || error.message.includes('API key') || error.message.includes('rate limit') || error.status === 429;
+                    if (isQuotaError) {
+                        console.log('   L 偵測到配額/金鑰錯誤，立即切換金鑰。');
+                    } else {
+                        await new Promise(res => setTimeout(res, 1000)); // 對於其他錯誤，稍作等待
+                    }
+                }
+                switchToNextApiKey();
+            }
+            console.log(`🏁 模型 ${MODELS[currentModelIndex]} 的所有 API Key 都已嘗試。`);
+            switchToNextModel();
         }
-      }
-      
-      // 如果是其他錯誤，等待一下再重試
-      if (attempt < maxRetries - 1) {
-        const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
-        console.log(`⏳ 等待 ${delay}ms 後重試...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
+        console.log(` ciclo ${cycle + 1}/${maxModelCycles} completado. Si es necesario, se iniciará un nuevo ciclo.`);
     }
+
+    console.error('🚨 所有模型和 API Key 都已嘗試，仍然無法獲取有效回應。');
+    throw lastError || new Error('無法從 LLM 獲取有效回應。');
+}
+
+// 3. 驗證函式
+function isJsonResponseValid(text) {
+  try {
+    const jsonString = text.replace(/```json\n?|```/g, '').trim();
+    if (!jsonString) return false;
+    const data = JSON.parse(jsonString);
+    return data && typeof data === 'object';
+  } catch (e) {
+    console.warn('   L JSON 解析失敗:', e.message);
+    return false;
   }
-  
-  // 所有 API Key 都失敗了
-  if (allKeysFailed) {
-    console.error('🚨 所有 Gemini API Key 都失敗！考慮切換到更低階模型或檢查配額');
-    console.error('💡 建議：1. 檢查 API Key 配額 2. 等待配額重置 3. 添加更多 API Key');
-  }
-  
-  throw new Error(`所有 ${GEMINI_KEYS.length} 個 API Key 都失敗了。最後錯誤: ${lastError.message}`);
+}
+
+function isAnalysisResponseValid(text) {
+    try {
+        const jsonString = text.replace(/```json\n?|```/g, '').trim();
+        if (!jsonString) return false;
+        const data = JSON.parse(jsonString);
+        // 確保 data 是物件且 title 屬性存在且不為空
+        return data && typeof data === 'object' && data.title && data.title.trim() !== '';
+    } catch (e) {
+        console.warn('   L 分析回應的 JSON 解析失敗:', e.message);
+        return false;
+    }
 }
 
 function extractUrls(message) {
@@ -171,7 +222,7 @@ async function extractDateTimeInfo(websiteData) {
   `;
 
   try {
-    const response = await callGeminiWithFailover(prompt);
+    const response = await callLLMWithRetryLogic(prompt, isJsonResponseValid);
     let jsonString = response.text().replace(/```json\n|```/g, '').trim();
     
     // 增加一個健全的 JSON 解析過程
@@ -359,36 +410,50 @@ function generateDefaultCategory(websiteData) {
 
 // 使用 LLM 深度分析網站功能並分類
 async function analyzeWebsiteFunction(url, websiteData) {
-  const contentToAnalyze = `${websiteData.title}\n${websiteData.description}\n${websiteData.rawContent.substring(0, 8000)}`;
-  const prompt = `請分析此網站內容，並以繁體中文回傳 JSON 格式：{"title": "網站標題", "category": "類別", "tags": ["標籤1", "標籤2"], "info": "功能介紹"}。可用類別：${VALID_CATEGORIES.join(', ')}。內容："""${contentToAnalyze}"""`;
-  
-  try {
-    const response = await callGeminiWithFailover(prompt);
-    let jsonString = response.text().replace(/```json\n|```/g, '').trim();
-    const analysis = JSON.parse(jsonString);
+  // 將網站數據中最關鍵的部分傳遞給LLM
+  const content = `${websiteData.title}\n${websiteData.description}\n${websiteData.rawContent.substring(0, 15000)}`;
+  const prompt = `
+    你是一個專業的內容分析師，你的任務是從給定的網站內容中提取結構化資訊。
+    請遵循以下規則：
 
-    // 【新增】驗證從 LLM 返回的物件結構
-    if (analysis && analysis.title && analysis.info && analysis.category) {
-        if (!VALID_CATEGORIES.includes(analysis.category)) {
-            analysis.category = "其他"; // 確保分類有效
-        }
-        return analysis; // 結構有效，直接返回
-    } else {
-        // 如果結構無效，拋出錯誤以觸發 catch 區塊的備用邏輯
-        throw new Error('LLM returned invalid JSON structure.');
+    1.  **標題 (title)**: 提取最合適、最簡潔的頁面主標題。這是最重要的欄位，必須提供。
+    2.  **分類 (category)**: 從以下列表中選擇一個最符合的分類：[${VALID_CATEGORIES.join(', ')}]。
+    3.  **標籤 (tags)**: 根據內容生成5到8個相關的關鍵字標籤，以便於搜尋和分類。
+    4.  **摘要 (info)**: 產生一段約100-150字的摘要，總結網站的核心內容。
+    5.  **事件 (events)**: 調用 extractDateTimeInfo 的能力來提取日期。如果內容中沒有明確的日期/事件，請回傳一個空陣列 []。
+
+    你的輸出必須是嚴格的 JSON 格式，不包含任何額外的解釋或註釋。格式如下：
+
+    {
+      "title": "網站主標題",
+      "category": "選擇的分類",
+      "tags": ["標籤1", "標籤2", "標籤3", ...],
+      "info": "網站內容摘要...",
+      "url": "${url}"
     }
 
+    網站內容如下：
+    """
+    ${content}
+    """
+  `;
+
+  try {
+    console.log(`🚀 開始分析網站: ${url}`);
+    const response = await callLLMWithRetryLogic(prompt, isAnalysisResponseValid);
+    let jsonString = response.text().replace(/```json\n?|```/g, '').trim();
+    const result = JSON.parse(jsonString);
+
+    // 從網站中提取事件
+    const events = await extractDateTimeInfo(websiteData);
+    result.events = events;
+
+    console.log(`✅ 成功分析網站: ${result.title}`);
+    return result;
+
   } catch (error) {
-    console.error('分析網站時 LLM 處理失敗或回傳格式不符:', error.message);
-    console.log('啟用備用方案，從網頁標籤生成基本資訊。');
-    
-    // 備用方案：從網頁的 <title> 和 <meta> 標籤生成基本資訊
-    return {
-      title: websiteData.title || url.substring(url.lastIndexOf('/') + 1),
-      category: generateDefaultCategory(websiteData),
-      tags: [],
-      info: generateDefaultInfo(websiteData.title, websiteData),
-    };
+    console.error(`在 analyzeWebsiteFunction 中分析 ${url} 時發生無法恢復的錯誤:`, error);
+    return generateDefaultInfo(url, websiteData); // Fallback to a default
   }
 }
 
@@ -402,7 +467,7 @@ async function analyzeBatchWebsiteFunctions(websiteDataList) {
     ${websiteDataList.map((data, index) => `${index + 1}. URL: ${data.url}\n   Title: ${data.title}\n   Content: ${data.rawContent.substring(0, 2000)}`).join('\n\n')}
   `;
   try {
-    const response = await callGeminiWithFailover(prompt);
+    const response = await callLLMWithRetryLogic(prompt, isJsonResponseValid);
     let jsonString = response.text().replace(/```json\n|```/g, '').trim();
     const batchResults = JSON.parse(jsonString);
 
@@ -517,69 +582,56 @@ async function parseMultipleLinks(message, urls) {
 
 // 模糊搜尋功能
 async function fuzzySearch(query, searchData) {
-  if (!query || !searchData || !Array.isArray(searchData)) {
-    return [];
+  const prompt = `
+  你是一個模糊搜尋專家。這裡有一筆資料，和一個搜尋查詢。
+  資料: ${JSON.stringify(searchData, null, 2)}
+  查詢: "${query}"
+  請判斷查詢是否與資料中的 "title" 或 "info" 高度相關。只需回答 "true" 或 "false"。
+  `;
+  try {
+    const response = await callLLMWithRetryLogic(prompt, (text) => text.includes('true') || text.includes('false'));
+    const result = response.text().toLowerCase();
+    return result.includes('true');
+  } catch (error) {
+    console.error('模糊搜尋失敗:', error);
+    return false;
   }
-  
-  const keywords = query.toLowerCase().split(/\s+/);
-  const results = [];
-  
-  for (const item of searchData) {
-    let score = 0;
-    const searchableText = `${item.title || ''} ${item.category || ''} ${item.content || ''} ${item.info || ''} ${item.url || ''}`.toLowerCase();
-    
-    // 計算匹配分數
-    for (const keyword of keywords) {
-      if (searchableText.includes(keyword)) {
-        // 標題匹配權重最高
-        if ((item.title || '').toLowerCase().includes(keyword)) {
-          score += 10;
-        }
-        // 分類匹配權重較高
-        if ((item.category || '').toLowerCase().includes(keyword)) {
-          score += 8;
-        }
-        // URL匹配
-        if ((item.url || '').toLowerCase().includes(keyword)) {
-          score += 6;
-        }
-        // 內容匹配
-        if ((item.content || '').toLowerCase().includes(keyword) || (item.info || '').toLowerCase().includes(keyword)) {
-          score += 3;
-        }
-      }
-    }
-    
-    if (score > 0) {
-      results.push({
-        ...item,
-        searchScore: score
-      });
-    }
-  }
-  
-  // 依分數排序，分數相同則按標題排序
-  return results.sort((a, b) => {
-    if (b.searchScore !== a.searchScore) {
-      return b.searchScore - a.searchScore;
-    }
-    return (a.title || '').localeCompare(b.title || '');
-  });
 }
 
 async function analyzeTextFunction(message) {
-  const prompt = `你是一個智能訊息分類助手。請將以下用戶訊息解析為結構化數據。請嚴格按照 JSON 格式輸出。輸出 JSON 格式應為：{"category": "...","title": "...", "content": "..."} 用戶訊息："""${message}"""`;
+  const prompt = `
+  你是一個專業的內容分析師，你的任務是從給定的文本中提取結構化資訊。
+  請遵循以下規則：
+
+  1.  **標題 (title)**: 提取最合適、最簡潔的主標題。這是最重要的欄位，必須提供。
+  2.  **分類 (category)**: 從以下列表中選擇一個最符合的分類：[${VALID_CATEGORIES.join(', ')}]。
+  3.  **標籤 (tags)**: 根據內容生成5到8個相關的關鍵字標籤，以便於搜尋和分類。
+  4.  **摘要 (info)**: 產生一段約100-150字的摘要，總結文本的核心內容。
+  5.  **事件 (events)**: 如果文本中包含日期和時間，提取它們。格式為 {type, title, date, description} 的陣列。
+
+  你的輸出必須是嚴格的 JSON 格式，不包含任何額外的解釋或註釋。
+
+  文本內容如下：
+  """
+  ${message}
+  """
+  `;
   try {
-    const response = await callGeminiWithFailover(prompt);
-    let jsonString = response.text().replace(/```json\n|```/g, '').trim();
-    return JSON.parse(jsonString);
+    const response = await callLLMWithRetryLogic(prompt, isAnalysisResponseValid);
+    let jsonString = response.text().replace(/```json\n?|```/g, '').trim();
+    const data = JSON.parse(jsonString);
+    console.log('✅ 成功分析文本:', data.title);
+    return [data];
   } catch (error) {
-    console.error('Error in analyzeTextFunction:', error);
-    return {
-      title: message.substring(0, 20),
-      category: '其他',
-      content: message
-    };
+    console.error('分析文本時發生無法恢復的錯誤:', error);
+    return [{
+      title: "分析失敗",
+      category: "其他",
+      tags: ["錯誤"],
+      info: `無法解析以下文本: ${message}`,
+      url: null,
+      events: []
+    }];
   }
 }
 
