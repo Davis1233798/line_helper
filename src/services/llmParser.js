@@ -573,7 +573,6 @@ async function analyzeTextFunction(message) {
 
 module.exports = {
   parseMessage,
-  fetchAndParse,
   analyzeWebsiteFunction,
   analyzeBatchWebsiteFunctions,
   generateGoogleCalendarLink,
