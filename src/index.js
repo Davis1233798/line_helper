@@ -20,7 +20,7 @@ const requiredEnvVars = [
 ];
 
 // 檢查可選的環境變數
-const optionalEnvVars = ['GOOGLE_CALENDAR_ID', 'GOOGLE_CREDENTIALS_JSON'];
+const optionalEnvVars = ['GOOGLE_CALENDAR_ID'];
 const missingOptionalVars = optionalEnvVars.filter(varName => !process.env[varName]);
 if (missingOptionalVars.length > 0) {
   console.warn('Missing optional environment variables:', missingOptionalVars);
