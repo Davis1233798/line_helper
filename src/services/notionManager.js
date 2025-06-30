@@ -105,12 +105,15 @@ async function saveToNotion(data) {
     
     console.log("📋 資料庫所有欄位:", Object.keys(database.properties));
     console.log("🎯 使用的標題欄位:", titleFieldName);
+    console.log("📝 傳入的資料標題:", data.title);
 
     if (titleFieldName && data.title) {
       properties[titleFieldName] = {
         title: [{ text: { content: data.title } }],
       };
-      console.log("已設定標題屬性。");
+      console.log(`✅ 已設定標題屬性: ${titleFieldName} = "${data.title}"`);
+    } else {
+      console.log(`❌ 無法設定標題屬性 - titleFieldName: ${titleFieldName}, data.title: ${data.title}`);
     }
 
     // 尋找分類欄位（可能的名稱）
@@ -191,11 +194,30 @@ async function saveToNotion(data) {
         }
     }
 
-    console.log("最終準備建立的頁面屬性:", JSON.stringify(Object.keys(properties)));
+    console.log("🔍 最終準備建立的頁面屬性:", JSON.stringify(Object.keys(properties)));
+    console.log("📊 屬性詳細內容:", JSON.stringify(properties, null, 2));
 
     if (Object.keys(properties).length === 0) {
-      console.error("錯誤：沒有任何有效屬性可供建立頁面。");
-      throw new Error("沒有從解析資料中找到任何有效欄位可存入 Notion。");
+      console.error("❌ 錯誤：沒有任何有效屬性可供建立頁面。");
+      console.error("🔧 可能的解決方案：");
+      console.error("1. 檢查 Notion 資料庫欄位名稱");
+      console.error("2. 確認欄位類型是否正確");
+      console.error("3. 檢查傳入的資料格式");
+      console.error("📋 資料庫欄位詳情:", JSON.stringify(Object.entries(database.properties).map(([name, prop]) => ({ name, type: prop.type })), null, 2));
+      
+      // 嘗試建立最基本的屬性
+      if (titleFieldName) {
+        const fallbackTitle = data.title || data.url || "未知標題";
+        properties[titleFieldName] = {
+          title: [{ text: { content: fallbackTitle } }],
+        };
+        console.log(`🆘 使用緊急備用方案設定標題: ${fallbackTitle}`);
+      }
+      
+      // 如果還是沒有屬性，則回傳錯誤
+      if (Object.keys(properties).length === 0) {
+        throw new Error("沒有從解析資料中找到任何有效欄位可存入 Notion。");
+      }
     }
 
     const response = await notion.pages.create({

@@ -410,7 +410,34 @@ async function handleEvent(event) {
       });
     }
 
-    const notionResult = await notionManager.saveToNotion(parsedInfo);
+    let notionResult = await notionManager.saveToNotion(parsedInfo);
+
+    // 如果 Notion 儲存失敗，嘗試降級處理
+    if (!notionResult.success && parsedInfo) {
+      console.log('🔄 Notion 儲存失敗，嘗試降級處理...');
+      
+      // 嘗試簡化資料格式重新儲存
+      const simplifiedData = {
+        title: parsedInfo.title || parsedInfo.url || '未知標題',
+        category: parsedInfo.category || '其他',
+        info: parsedInfo.info || '自動分析的內容',
+        url: parsedInfo.url
+      };
+      
+      console.log('📝 使用簡化資料重新嘗試:', JSON.stringify(simplifiedData, null, 2));
+      notionResult = await notionManager.saveToNotion(simplifiedData);
+      
+      if (!notionResult.success) {
+        console.log('⚠️  降級處理也失敗，但仍處理日曆功能');
+        // 即使 Notion 失敗，仍然處理日曆功能
+        notionResult = {
+          success: false,
+          title: simplifiedData.title,
+          url: null,
+          error: '儲存失敗但已處理日曆功能'
+        };
+      }
+    }
 
     if (notionResult.success) {
       let replyMessage = `✅ 已成功儲存：${notionResult.title}\n${notionResult.url}`;
@@ -481,9 +508,56 @@ async function handleEvent(event) {
       });
     } else {
       console.error('儲存到 Notion 失敗:', notionResult.error);
+      
+      // 即使 Notion 失敗，仍然處理日曆功能
+      let replyMessage = `⚠️ 儲存到 Notion 失敗，但已處理其他功能\n錯誤：${notionResult.error}`;
+
+      // 處理日曆事件（即使 Notion 失敗）
+      if (parsedInfo && parsedInfo.events && parsedInfo.events.length > 0) {
+        replyMessage += '\n\n📅 發現重要日期：';
+
+        // 批次新增到 Google Calendar
+        const googleBatchResults = await googleCalendarManager.addMultipleEvents(parsedInfo.events);
+
+        for (const [index, calEvent] of parsedInfo.events.entries()) {
+          const eventTypeEmoji = {
+            'deadline': '⏰',
+            'registration': '📝',
+            'start': '🚀',
+            'end': '🏁',
+            'participation': '🎯',
+            'meeting': '👥',
+            'reminder': '🔔',
+            'event': '📅'
+          };
+
+          const emoji = eventTypeEmoji[calEvent.type] || '📅';
+          const googleResult = googleBatchResults[index];
+          
+          replyMessage += `\n\n${index + 1}. ${emoji} [${googleResult?.category || calEvent.type}] ${calEvent.title}`;
+          replyMessage += `\n   📅 ${calEvent.date.toLocaleString('zh-TW')}`;
+
+          // Google Calendar 結果
+          if (googleResult?.success) {
+            replyMessage += `\n   ✅ 已新增至 Google 日曆`;
+            if (googleResult.url) {
+              replyMessage += `\n   🔗 ${googleResult.url}`;
+            }
+          } else {
+            const googleLink = llmParser.generateGoogleCalendarLink(calEvent);
+            replyMessage += `\n   🔗 手動新增: ${googleLink}`;
+          }
+
+          // Apple 日曆下載連結
+          const eventId = `${Date.now()}-${index}`;
+          const downloadUrl = `${process.env.BASE_URL || 'https://line-helper.onrender.com'}/download-ics/${eventId}?title=${encodeURIComponent(calEvent.title)}&description=${encodeURIComponent(calEvent.description)}&date=${calEvent.date.toISOString()}`;
+          replyMessage += `\n   🍎 Apple 日曆: ${downloadUrl}`;
+        }
+      }
+
       return client.replyMessage(event.replyToken, {
         type: 'text',
-        text: `儲存到 Notion 失敗：${notionResult.error}`,
+        text: replyMessage,
       });
     }
   } catch (error) {
