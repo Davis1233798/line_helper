@@ -59,6 +59,65 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Apple 日曆 ICS 檔案下載端點
+app.get('/download-ics/:eventId', (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { title, description, date } = req.query;
+    
+    if (!title || !date) {
+      return res.status(400).json({ error: '缺少必要參數' });
+    }
+    
+    const event = {
+      title: decodeURIComponent(title),
+      description: decodeURIComponent(description || ''),
+      date: new Date(date)
+    };
+    
+    // 生成 ICS 內容
+    const uid = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}@linenotionbot.com`;
+    const startTime = event.date.toISOString().replace(/-|:|\.\d{3}/g, '');
+    const endTime = new Date(event.date.getTime() + 60 * 60 * 1000).toISOString().replace(/-|:|\.\d{3}/g, '');
+    const now = new Date().toISOString().replace(/-|:|\.\d{3}/g, '');
+    
+    const cleanText = (text) => {
+      return text.replace(/[,;\\]/g, '\\$&').replace(/\n/g, '\\n');
+    };
+    
+    const icsContent = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Line Notion Bot//Event Calendar//EN',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      'BEGIN:VEVENT',
+      `DTSTART:${startTime}`,
+      `DTEND:${endTime}`,
+      `DTSTAMP:${now}`,
+      `UID:${uid}`,
+      `CREATED:${now}`,
+      `LAST-MODIFIED:${now}`,
+      `SUMMARY:${cleanText(event.title)}`,
+      `DESCRIPTION:${cleanText(event.description)}`,
+      'STATUS:CONFIRMED',
+      'TRANSP:OPAQUE',
+      'END:VEVENT',
+      'END:VCALENDAR'
+    ].join('\r\n');
+    
+    const filename = `${event.title.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.ics`;
+    
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(icsContent);
+    
+  } catch (error) {
+    console.error('生成 ICS 檔案時發生錯誤:', error);
+    res.status(500).json({ error: '生成日曆檔案失敗' });
+  }
+});
+
 // Line Webhook endpoint - 立即回應200，非同步處理訊息
 app.post('/webhook', (req, res) => {
   // 先立即回應200
@@ -309,15 +368,21 @@ async function handleEvent(event) {
           const googleCalResult = await googleCalendarManager.addEventToCalendar(calEvent);
 
           if (googleCalResult.success) {
-            replyMessage += `\n✅ 已自動新增至Google日曆: ${googleCalResult.eventLink}`;
+            replyMessage += `\n✅ 已自動新增至Google日曆`;
+            if (googleCalResult.url) {
+              replyMessage += `\n🔗 查看Google日曆: ${googleCalResult.url}`;
+            }
           } else {
             // 自動新增失敗，提供手動連結
-            replyMessage += `\n❌ ${googleCalResult.error}`;
+            replyMessage += `\n⚠️  無法自動新增至Google日曆`;
             const googleLink = llmParser.generateGoogleCalendarLink(calEvent);
-            const appleLink = await llmParser.generateAppleCalendarLink(calEvent); // This one is async
             replyMessage += `\n🔗 手動新增Google日曆: ${googleLink}`;
-            replyMessage += `\n🍎 手動下載Apple日曆: ${appleLink}`;
           }
+
+          // 產生 Apple 日曆下載連結
+          const eventId = `${Date.now()}-${index}`;
+          const downloadUrl = `${process.env.BASE_URL || 'https://your-render-url.com'}/download-ics/${eventId}?title=${encodeURIComponent(calEvent.title)}&description=${encodeURIComponent(calEvent.description)}&date=${calEvent.date.toISOString()}`;
+          replyMessage += `\n🍎 下載Apple日曆: ${downloadUrl}`;
         }
       }
 
@@ -348,27 +413,29 @@ async function handleEvent(event) {
   }
 }
 
-// 網路連線偵測
+// 網路連線偵測 - 改進版，優先使用 curl（適合 Docker 環境）
 function checkInternetConnection() {
-  const pingCommand = os.platform() === 'win32' ? 'ping -n 1 google.com' : 'ping -c 1 google.com';
-  
-  exec(pingCommand, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`網路偵測失敗 (ping): ${error.message}`);
-      // 在ping失敗時嘗試curl，因為某些環境可能禁用ICMP但允許HTTP
-      exec('curl -s --head https://www.google.com', (curlError, curlStdout, curlStderr) => {
-        if (curlError) {
-          console.error(`網路偵測失敗 (curl): ${curlError.message}`);
-          console.warn('警告: 伺服器可能無法連線到外部網路，這會影響Google Calendar API和Apple日曆連結生成。');
-        } else if (curlStdout && (curlStdout.includes('200 OK') || curlStdout.includes('301 Moved Permanently'))) {
-          console.log('網路偵測成功 (curl)，連線正常。');
+  // 優先使用 curl，因為在 Docker 環境中更可靠
+  exec('curl -I https://www.google.com --connect-timeout 10 --max-time 15', (curlError, curlStdout, curlStderr) => {
+    if (curlError) {
+      console.warn(`⚠️  網路偵測 (curl) 失敗: ${curlError.message}`);
+      // curl 失敗時嘗試 ping（某些環境可能有限制）
+      const pingCommand = os.platform() === 'win32' ? 'ping -n 1 google.com' : 'ping -c 1 google.com';
+      exec(pingCommand, (pingError, pingStdout, pingStderr) => {
+        if (pingError) {
+          console.warn('⚠️  網路偵測 (ping) 也失敗，這在某些 Docker 環境中是正常的');
+          console.log('📡 服務仍可正常運行，僅外部連線檢測受限');
         } else {
-          console.warn('警告: 網路偵測 (curl) 結果異常，外部連線可能受限。');
+          console.log('✅ 網路連線正常 (ping)');
         }
       });
-      return;
+    } else {
+      if (curlStdout.includes('200') || curlStdout.includes('301') || curlStdout.includes('HTTP')) {
+        console.log('✅ 網路連線正常 (curl)');
+      } else {
+        console.warn('⚠️  網路偵測結果異常，但服務應該仍可正常運行');
+      }
     }
-    console.log('網路偵測成功 (ping)，連線正常。');
   });
 }
 
@@ -380,8 +447,12 @@ app.listen(port, '0.0.0.0', () => {
     hasLineToken: !!process.env.LINE_CHANNEL_ACCESS_TOKEN,
     hasLineSecret: !!process.env.LINE_CHANNEL_SECRET,
     hasGeminiKey: !!process.env.GEMINI_API_KEY,
+    hasGeminiKey2: !!process.env.GEMINI_API_KEY_2,
+    hasGeminiKey3: !!process.env.GEMINI_API_KEY_3,
     hasNotionToken: !!process.env.NOTION_API_TOKEN,
-    hasNotionDb: !!process.env.NOTION_DATABASE_ID
+    hasNotionDb: !!process.env.NOTION_DATABASE_ID,
+    hasGoogleCalId: !!process.env.GOOGLE_CALENDAR_ID,
+    hasBaseUrl: !!process.env.BASE_URL
   });
   notionManager.getNotionData(); // 啟動時獲取 Notion 資料庫數據
   checkInternetConnection(); // 啟動時檢查網路連線

@@ -4,8 +4,85 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { JSDOM } = require('jsdom');
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+// 支援多個 Gemini API Key 的故障轉移
+const GEMINI_KEYS = [
+  process.env.GEMINI_API_KEY,
+  process.env.GEMINI_API_KEY_2,
+  process.env.GEMINI_API_KEY_3
+].filter(key => key && key.trim() !== ''); // 移除空值
+
+if (GEMINI_KEYS.length === 0) {
+  console.error('錯誤：沒有找到有效的 GEMINI_API_KEY');
+  process.exit(1);
+}
+
+let currentKeyIndex = 0;
+let genAI = new GoogleGenerativeAI(GEMINI_KEYS[currentKeyIndex]);
+let model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+console.log(`🔑 載入了 ${GEMINI_KEYS.length} 個 Gemini API Key`);
+
+// 切換到下一個 API Key
+function switchToNextApiKey() {
+  if (GEMINI_KEYS.length <= 1) {
+    console.warn('⚠️  只有一個 API Key，無法進行故障轉移');
+    return false;
+  }
+  
+  currentKeyIndex = (currentKeyIndex + 1) % GEMINI_KEYS.length;
+  genAI = new GoogleGenerativeAI(GEMINI_KEYS[currentKeyIndex]);
+  model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  
+  console.log(`🔄 切換至 API Key #${currentKeyIndex + 1}`);
+  return true;
+}
+
+// 帶有故障轉移的 API 調用
+async function callGeminiWithFailover(prompt, maxRetries = GEMINI_KEYS.length) {
+  let lastError;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const result = await model.generateContent(prompt);
+      const response = result.response;
+      
+      // 如果成功，重置回第一個 Key（可選）
+      if (currentKeyIndex !== 0) {
+        console.log(`✅ API Key #${currentKeyIndex + 1} 調用成功`);
+      }
+      
+      return response;
+    } catch (error) {
+      lastError = error;
+      console.error(`❌ API Key #${currentKeyIndex + 1} 調用失敗:`, error.message);
+      
+      // 如果是配額或認證錯誤，切換到下一個 Key
+      if (error.message.includes('quota') || 
+          error.message.includes('API key') || 
+          error.message.includes('rate limit') ||
+          error.message.includes('permission')) {
+        
+        if (attempt < maxRetries - 1) {
+          const switched = switchToNextApiKey();
+          if (switched) {
+            console.log(`🔄 正在重試 API 調用...`);
+            continue;
+          }
+        }
+      }
+      
+      // 如果是其他錯誤，等待一下再重試
+      if (attempt < maxRetries - 1) {
+        const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+        console.log(`⏳ 等待 ${delay}ms 後重試...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+    }
+  }
+  
+  throw new Error(`所有 API Key 都失敗了。最後錯誤: ${lastError.message}`);
+}
 
 function extractUrls(message) {
   if (!message) return [];
@@ -64,8 +141,7 @@ async function extractDateTimeInfo(websiteData) {
   `;
 
   try {
-    const result = await model.generateContent(prompt);
-    const response = result.response;
+    const response = await callGeminiWithFailover(prompt);
     let jsonString = response.text().replace(/```json\n|```/g, '').trim();
     
     // 增加一個健全的 JSON 解析過程
@@ -114,28 +190,49 @@ function generateGoogleCalendarLink(event) {
   return `${baseUrl}&text=${title}&dates=${startTime}/${endTime}&details=${details}&sf=true&output=xml`;
 }
 
-// 生成 Apple 行事曆連結 (ICS 格式)，透過外部服務產生可下載連結
+// 生成 Apple 行事曆 ICS 檔案內容和下載連結
 async function generateAppleCalendarLink(event) {
-  const uid = `${Date.now()}@linenotionbot.com`;
+  const uid = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}@linenotionbot.com`;
   const startTime = event.date.toISOString().replace(/-|:|\.\d{3}/g, '');
   const endTime = new Date(event.date.getTime() + 60 * 60 * 1000).toISOString().replace(/-|:|\.\d{3}/g, '');
+  const now = new Date().toISOString().replace(/-|:|\.\d{3}/g, '');
+
+  // 清理文本內容以符合 ICS 格式要求
+  const cleanText = (text) => {
+    return text.replace(/[,;\\]/g, '\\$&').replace(/\n/g, '\\n');
+  };
 
   const icsContent = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//Line Notion Bot//Event//EN',
+    'PRODID:-//Line Notion Bot//Event Calendar//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
     'BEGIN:VEVENT',
     `DTSTART:${startTime}`,
     `DTEND:${endTime}`,
-    `SUMMARY:${event.title}`,
-    `DESCRIPTION:${event.description}`,
+    `DTSTAMP:${now}`,
     `UID:${uid}`,
+    `CREATED:${now}`,
+    `LAST-MODIFIED:${now}`,
+    `SUMMARY:${cleanText(event.title)}`,
+    `DESCRIPTION:${cleanText(event.description)}`,
+    'STATUS:CONFIRMED',
+    'TRANSP:OPAQUE',
     'END:VEVENT',
     'END:VCALENDAR'
-  ].join('\\r\\n');
+  ].join('\r\n');
 
-  // 使用 encodeURIComponent 確保特殊字元被正確處理
-  return `data:text/calendar;charset=utf-8,${encodeURIComponent(icsContent)}`;
+  // 生成 base64 編碼以確保特殊字元正確處理
+  const base64Content = Buffer.from(icsContent, 'utf-8').toString('base64');
+  
+  // 返回一個對象，包含多種格式
+  return {
+    dataUrl: `data:text/calendar;charset=utf-8,${encodeURIComponent(icsContent)}`,
+    base64Url: `data:text/calendar;charset=utf-8;base64,${base64Content}`,
+    filename: `${event.title.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.ics`,
+    content: icsContent
+  };
 }
 
 // 生成行事曆資訊
@@ -146,7 +243,7 @@ async function generateCalendarInfo(events) {
   
   const calendarInfoPromises = events.map(async (event) => {
     const googleUrl = generateGoogleCalendarLink(event);
-    const appleUrl = await generateAppleCalendarLink(event);
+    const appleCalendarInfo = await generateAppleCalendarLink(event);
     
     return {
       type: event.type,
@@ -154,7 +251,10 @@ async function generateCalendarInfo(events) {
       date: event.date.toISOString(),
       description: event.description,
       googleCalendarUrl: googleUrl,
-      appleCalendarUrl: appleUrl
+      appleCalendarUrl: appleCalendarInfo.dataUrl,
+      appleCalendarBase64: appleCalendarInfo.base64Url,
+      appleFilename: appleCalendarInfo.filename,
+      icsContent: appleCalendarInfo.content
     };
   });
   
@@ -223,13 +323,11 @@ function generateDefaultCategory(websiteData) {
 
 // 使用 LLM 深度分析網站功能並分類
 async function analyzeWebsiteFunction(url, websiteData) {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
   const contentToAnalyze = `${websiteData.title}\n${websiteData.description}\n${websiteData.rawContent.substring(0, 8000)}`;
   const prompt = `請分析此網站內容，並以繁體中文回傳 JSON 格式：{"title": "網站標題", "category": "類別", "tags": ["標籤1", "標籤2"], "info": "功能介紹"}。可用類別：${VALID_CATEGORIES.join(', ')}。內容："""${contentToAnalyze}"""`;
   
   try {
-    const result = await model.generateContent(prompt);
-    const response = result.response;
+    const response = await callGeminiWithFailover(prompt);
     let jsonString = response.text().replace(/```json\n|```/g, '').trim();
     const analysis = JSON.parse(jsonString);
 
@@ -260,7 +358,6 @@ async function analyzeWebsiteFunction(url, websiteData) {
 
 // 批次分析多個網站功能 (8個一組)
 async function analyzeBatchWebsiteFunctions(websiteDataList) {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
   const prompt = `
     你是一個網站分析工具。請為以下每個網站生成摘要、分類和標籤。
     以繁體中文回傳一個 JSON 陣列，每個物件包含 "title", "category", "tags", "info"。
@@ -269,8 +366,7 @@ async function analyzeBatchWebsiteFunctions(websiteDataList) {
     ${websiteDataList.map((data, index) => `${index + 1}. URL: ${data.url}\n   Title: ${data.title}\n   Content: ${data.rawContent.substring(0, 2000)}`).join('\n\n')}
   `;
   try {
-    const result = await model.generateContent(prompt);
-    const response = result.response;
+    const response = await callGeminiWithFailover(prompt);
     let jsonString = response.text().replace(/```json\n|```/g, '').trim();
     const batchResults = JSON.parse(jsonString);
 
@@ -345,7 +441,7 @@ async function parseSingleMessage(message, urls) {
     return [{ title: url, info: "無法讀取網站內容", url: url, category: "其他", tags: [], events: [] }];
   }
   const analysisResult = await analyzeWebsiteFunction(url, websiteData);
-  const calendarEvents = extractDateTimeInfo(websiteData);
+  const calendarEvents = await extractDateTimeInfo(websiteData);
   return [{ ...analysisResult, url: url, events: calendarEvents }];
 }
 
@@ -353,10 +449,10 @@ async function parseSingleMessage(message, urls) {
 async function parseMultipleLinks(message, urls) {
   try {
     const websiteAnalysis = await module.exports.fetchMultipleWebsiteContents(urls);
-    const enrichedData = urls.map((url, index) => {
+    const enrichedData = await Promise.all(urls.map(async (url, index) => {
       const analysis = websiteAnalysis[index] || {};
       const websiteData = { rawContent: analysis.info || "", title: analysis.title || "", description: ""};
-      const calendarEvents = extractDateTimeInfo(websiteData);
+      const calendarEvents = await extractDateTimeInfo(websiteData);
       
       return {
         category: analysis.category || "其他",
@@ -366,7 +462,7 @@ async function parseMultipleLinks(message, urls) {
         url: url,
         events: calendarEvents
       };
-    });
+    }));
     console.log(`建立 ${enrichedData.length} 個項目`);
     return enrichedData;
   } catch (error) {
@@ -436,11 +532,9 @@ async function fuzzySearch(query, searchData) {
 }
 
 async function analyzeTextFunction(message) {
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
   const prompt = `你是一個智能訊息分類助手。請將以下用戶訊息解析為結構化數據。請嚴格按照 JSON 格式輸出。輸出 JSON 格式應為：{"category": "...","title": "...", "content": "..."} 用戶訊息："""${message}"""`;
   try {
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
+    const response = await callGeminiWithFailover(prompt);
     let jsonString = response.text().replace(/```json\n|```/g, '').trim();
     return JSON.parse(jsonString);
   } catch (error) {
