@@ -573,12 +573,9 @@ async function analyzeTextFunction(message) {
 
 module.exports = {
   parseMessage,
-  fuzzySearch,
-  extractDateTimeInfo,
-  VALID_CATEGORIES,
-  CATEGORY_TAGS,
-  generateCalendarInfo,
+  fetchAndParse,
+  analyzeWebsiteFunction,
+  analyzeBatchWebsiteFunctions,
   generateGoogleCalendarLink,
-  generateAppleCalendarLink,
-  fetchMultipleWebsiteContents
+  getWebsiteData,
 };
