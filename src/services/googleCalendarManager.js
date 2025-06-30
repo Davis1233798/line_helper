@@ -1,41 +1,51 @@
 const { google } = require('googleapis');
 const path = require('path');
+const fs = require('fs');
 
 // 要操作的日曆ID
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID;
 
 // 設定認證
 let auth;
-if (process.env.GOOGLE_CREDENTIALS_JSON) {
-  // 生產環境：從環境變數讀取憑證
+
+// 優先順序：1. Render Secret Files 2. 本地開發檔案
+const SECRET_FILE_PATH = '/etc/secrets/strange-bloom-382507-11b0f2d5a164.json';
+const LOCAL_FILE_PATH = path.join(__dirname, '../../google-credentials.json');
+
+console.log('🔑 開始 Google Calendar 認證流程');
+
+// 1. 優先嘗試 Render Secret Files
+if (fs.existsSync(SECRET_FILE_PATH)) {
+  console.log('📁 使用 Render Secret File 進行認證:', SECRET_FILE_PATH);
   try {
-    // 解決從環境變數讀取時，換行符被轉義成 \\n 的問題
-    // 同時移除可能由複製貼上產生的非法控制字元
-    let credentialsString = process.env.GOOGLE_CREDENTIALS_JSON;
-    credentialsString = credentialsString.replace(/\\n/g, '\n');
-    credentialsString = credentialsString.replace(/[\x00-\x1F\x7F]/g, (match) => {
-      // 保留 private_key 中的 \n
-      if (match === '\n') return '\n';
-      return '';
-    });
-    
-    const credentials = JSON.parse(credentialsString);
     auth = new google.auth.GoogleAuth({
-      credentials,
+      keyFile: SECRET_FILE_PATH,
       scopes: ['https://www.googleapis.com/auth/calendar'],
     });
+    console.log('✅ 使用 Render Secret File 建立 Google Auth 成功');
   } catch (e) {
-    console.error('解析 GOOGLE_CREDENTIALS_JSON 環境變數失敗:', e);
-    // 可選：設定一個無效的auth，讓後續操作優雅地失敗
+    console.error('❌ 使用 Render Secret File 失敗:', e.message);
+    auth = null;
+  }
+} else if (fs.existsSync(LOCAL_FILE_PATH)) {
+  // 2. 備用：本地開發檔案
+  console.log('📁 Secret File 不存在，使用本地開發檔案:', LOCAL_FILE_PATH);
+  try {
+    auth = new google.auth.GoogleAuth({
+      keyFile: LOCAL_FILE_PATH,
+      scopes: ['https://www.googleapis.com/auth/calendar'],
+    });
+    console.log('✅ 使用本地憑證檔案建立 Google Auth 成功');
+  } catch (e) {
+    console.error('❌ 使用本地憑證檔案失敗:', e.message);
     auth = null;
   }
 } else {
-  // 開發環境：從本地檔案讀取憑證
-  const KEYFILEPATH = path.join(__dirname, '../../google-credentials.json');
-  auth = new google.auth.GoogleAuth({
-    keyFile: KEYFILEPATH,
-    scopes: ['https://www.googleapis.com/auth/calendar'],
-  });
+  console.error('❌ 找不到任何 Google 憑證檔案');
+  console.error('🔍 檢查路徑:');
+  console.error('   - Render Secret File:', SECRET_FILE_PATH);
+  console.error('   - 本地開發檔案:', LOCAL_FILE_PATH);
+  auth = null;
 }
 
 const calendar = google.calendar({ version: 'v3', auth });
@@ -301,4 +311,4 @@ module.exports = {
   listCalendars,
   detectEventType,
   getEventStyle
-}; 
+};
