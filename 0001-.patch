@@ -1,0 +1,595 @@
+From 4fcb5c42088f9933463326a8d939598b057724df Mon Sep 17 00:00:00 2001
+From: Jack Chen <davis1233798@gmail.com>
+Date: Mon, 30 Jun 2025 13:16:02 +0800
+Subject: [PATCH] =?UTF-8?q?=E2=9C=A8=20=E5=A2=9E=E5=BC=B7=E6=97=A5?=
+ =?UTF-8?q?=E6=9B=86=E5=8A=9F=E8=83=BD=EF=BC=9A=E6=99=BA=E6=85=A7=E4=BA=8B?=
+ =?UTF-8?q?=E4=BB=B6=E9=A1=9E=E5=9E=8B=E8=AD=98=E5=88=A5=E3=80=81=E6=89=B9?=
+ =?UTF-8?q?=E6=AC=A1=E8=99=95=E7=90=86=E3=80=81=E9=A1=8F=E8=89=B2=E5=88=86?=
+ =?UTF-8?q?=E9=A1=9E=E8=88=87=E6=97=A5=E6=9B=86=E7=AE=A1=E7=90=86?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- 新增智慧事件類型識別（deadline, registration, start, end, participation, meeting, reminder）
+- 實作批次處理多個事件到 Google Calendar
+- 根據事件類型設定不同顏色和智慧提醒
+- 新增日曆 ID 查詢功能（輸入「日曆列表」或「日曆ID」）
+- 增強 LLM 日期提取，支援更精確的事件分類
+- 改進使用者介面，顯示事件類型 emoji 和詳細資訊
+- 更新 README 文件說明新功能
+---
+ .serena/serena_config.yml             |   3 +
+ README.md                             |  37 +++-
+ src/index.js                          | 106 ++++++++++--
+ src/services/googleCalendarManager.js | 236 ++++++++++++++++++++++++--
+ src/services/llmParser.js             |  41 ++++-
+ 5 files changed, 383 insertions(+), 40 deletions(-)
+ create mode 100644 .serena/serena_config.yml
+
+diff --git a/.serena/serena_config.yml b/.serena/serena_config.yml
+new file mode 100644
+index 0000000..a19e0da
+--- /dev/null
++++ b/.serena/serena_config.yml
+@@ -0,0 +1,3 @@
++llm_model: "gemini-2.5-pro"
++llm_api_key: "AIzaSyD-9T2YzgFRFKJ4a11FwqWKU0JLWG-3hPM"
++llm_endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=AIzaSyD-9T2YzgFRFKJ4a11FwqWKU0JLWG-3hPM"
+\ No newline at end of file
+diff --git a/README.md b/README.md
+index 6f8f8ff..abeb2d0 100644
+--- a/README.md
++++ b/README.md
+@@ -30,11 +30,16 @@
+ - **分類搜尋**：`查詢 [分類名稱]`
+ - **組合搜尋**：`查詢 [分類] [關鍵字]`
+ 
+-### 📅 行事曆功能
++### 📅 行事曆功能（增強版）
+ - **智慧日期提取**：自動識別網頁中的重要日期
+-- **Google Calendar**：自動新增事件或提供手動連結
+-- **Apple 日曆**：提供 ICS 檔案下載
+-- **多種格式支援**：處理各種日期時間格式
++- **事件類型識別**：自動分類為截止日期、報名日期、開始日期、結束日期、參加日期等
++- **Google Calendar 整合**：
++  - 自動新增事件到指定日曆
++  - 根據事件類型設定不同顏色和提醒
++  - 批次處理多個事件
++  - 智慧提醒設定（截止日期提前1天+2小時+15分鐘提醒）
++- **Apple 日曆支援**：提供 ICS 檔案下載
++- **日曆管理**：輸入「日曆列表」或「日曆ID」查詢可用的 Google Calendar
+ 
+ ## 🔧 技術架構
+ 
+@@ -132,9 +137,27 @@ npm run dev
+ 
+ ### 行事曆功能
+ 當訊息包含日期資訊時，機器人會：
+-1. 自動提取重要日期
+-2. 嘗試新增到 Google Calendar
+-3. 提供 Apple 日曆下載連結
++1. **智慧識別事件類型**：
++   - ⏰ 截止日期（deadline）
++   - 📝 報名日期（registration）
++   - 🚀 開始日期（start）
++   - 🏁 結束日期（end）
++   - 🎯 參加日期（participation）
++   - 👥 會議（meeting）
++   - 🔔 提醒事項（reminder）
++
++2. **自動新增到 Google Calendar**：
++   - 根據事件類型設定不同顏色
++   - 智慧提醒設定（截止日期多重提醒）
++   - 批次處理多個事件
++
++3. **提供 Apple 日曆下載**：ICS 檔案格式
++
++### 日曆管理指令
++```
++日曆列表        # 查詢所有可用的 Google Calendar
++日曆ID          # 顯示日曆 ID 和使用說明
++```
+ 
+ ## 🛠️ API 端點
+ 
+diff --git a/src/index.js b/src/index.js
+index 9206766..03e0875 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -193,6 +193,58 @@ app.post('/webhook-raw', express.raw({type: 'application/json'}), (req, res) =>
+   }
+ });
+ 
++// 處理日曆列表查詢
++async function handleCalendarListQuery(event) {
++  try {
++    console.log('📅 用戶請求查詢 Google Calendar 列表');
++    
++    const calendars = await googleCalendarManager.listCalendars();
++    
++    if (calendars.length === 0) {
++      return client.replyMessage(event.replyToken, {
++        type: 'text',
++        text: '❌ 無法取得日曆列表，請確認：\n1. Google Calendar API 憑證是否正確設定\n2. 服務帳號是否有存取權限\n3. GOOGLE_CREDENTIALS_JSON 環境變數是否設定正確',
++      });
++    }
++
++    let replyMessage = '📅 您的 Google Calendar 列表：\n\n';
++    
++    calendars.forEach((cal, index) => {
++      replyMessage += `${index + 1}. ${cal.name}\n`;
++      replyMessage += `   📧 ID: ${cal.id}\n`;
++      if (cal.primary) {
++        replyMessage += `   ⭐ 主要日曆\n`;
++      }
++      if (cal.description) {
++        replyMessage += `   📝 ${cal.description}\n`;
++      }
++      replyMessage += `   🔑 權限: ${cal.accessRole}\n\n`;
++    });
++
++    replyMessage += '💡 使用方式：\n';
++    replyMessage += '1. 複製您想要的日曆 ID\n';
++    replyMessage += '2. 在 Render 環境變數中設定 GOOGLE_CALENDAR_ID\n';
++    replyMessage += '3. 重新部署應用程式即可自動新增事件至該日曆';
++
++    // 檢查訊息長度
++    if (replyMessage.length > 5000) {
++      replyMessage = replyMessage.substring(0, 4950) + '\n...（列表過長，部分內容已省略）';
++    }
++
++    return client.replyMessage(event.replyToken, {
++      type: 'text',
++      text: replyMessage,
++    });
++
++  } catch (error) {
++    console.error('處理日曆列表查詢時發生錯誤：', error);
++    return client.replyMessage(event.replyToken, {
++      type: 'text',
++      text: '❌ 查詢日曆列表時發生錯誤，請稍後再試。\n\n如果問題持續發生，請檢查 Google Calendar API 設定。',
++    });
++  }
++}
++
+ // 處理搜尋查詢
+ async function handleSearchQuery(event, userMessage) {
+   try {
+@@ -340,6 +392,12 @@ async function handleEvent(event) {
+       return;
+     }
+ 
++    // 處理日曆管理指令
++    if (userMessage.includes('日曆') && (userMessage.includes('列表') || userMessage.includes('清單') || userMessage.includes('ID'))) {
++      await handleCalendarListQuery(event);
++      return;
++    }
++
+     // 如果不是搜尋查詢，繼續進行解析和儲存
+     const parsedInfo = await llmParser.parseMessage(userMessage);
+ 
+@@ -357,32 +415,58 @@ async function handleEvent(event) {
+     if (notionResult.success) {
+       let replyMessage = `✅ 已成功儲存：${notionResult.title}\n${notionResult.url}`;
+ 
+-      // 處理日曆事件並產生連結
++      // 【增強】處理日曆事件並產生連結 - 支援多種事件類型
+       if (parsedInfo.events && parsedInfo.events.length > 0) {
+         replyMessage += '\n\n📅 發現重要日期：';
+ 
++        // 批次新增到 Google Calendar
++        const googleBatchResults = await googleCalendarManager.addMultipleEvents(parsedInfo.events);
++
+         for (const [index, calEvent] of parsedInfo.events.entries()) {
+-          replyMessage += `\n\n${index + 1}. ${calEvent.title} - ${calEvent.description}`;
++          const eventTypeEmoji = {
++            'deadline': '⏰',
++            'registration': '📝',
++            'start': '🚀',
++            'end': '🏁',
++            'participation': '🎯',
++            'meeting': '👥',
++            'reminder': '🔔',
++            'event': '📅'
++          };
+ 
+-          // 嘗試自動新增到 Google Calendar
+-          const googleCalResult = await googleCalendarManager.addEventToCalendar(calEvent);
++          const emoji = eventTypeEmoji[calEvent.type] || '📅';
++          const googleResult = googleBatchResults[index];
++          
++          replyMessage += `\n\n${index + 1}. ${emoji} [${googleResult?.category || calEvent.type}] ${calEvent.title}`;
++          replyMessage += `\n   📅 ${calEvent.date.toLocaleString('zh-TW')}`;
++          
++          if (calEvent.description && calEvent.description !== calEvent.title) {
++            replyMessage += `\n   📝 ${calEvent.description.substring(0, 50)}${calEvent.description.length > 50 ? '...' : ''}`;
++          }
+ 
+-          if (googleCalResult.success) {
+-            replyMessage += `\n✅ 已自動新增至Google日曆`;
+-            if (googleCalResult.url) {
+-              replyMessage += `\n🔗 查看Google日曆: ${googleCalResult.url}`;
++          // Google Calendar 結果
++          if (googleResult?.success) {
++            replyMessage += `\n   ✅ 已自動新增至 Google 日曆`;
++            if (googleResult.url) {
++              replyMessage += `\n   🔗 查看: ${googleResult.url}`;
+             }
+           } else {
+             // 自動新增失敗，提供手動連結
+-            replyMessage += `\n⚠️  無法自動新增至Google日曆`;
++            replyMessage += `\n   ⚠️  Google 日曆: ${googleResult?.message || '新增失敗'}`;
+             const googleLink = llmParser.generateGoogleCalendarLink(calEvent);
+-            replyMessage += `\n🔗 手動新增Google日曆: ${googleLink}`;
++            replyMessage += `\n   🔗 手動新增: ${googleLink}`;
+           }
+ 
+           // 產生 Apple 日曆下載連結
+           const eventId = `${Date.now()}-${index}`;
+           const downloadUrl = `${process.env.BASE_URL || 'https://your-render-url.com'}/download-ics/${eventId}?title=${encodeURIComponent(calEvent.title)}&description=${encodeURIComponent(calEvent.description)}&date=${calEvent.date.toISOString()}`;
+-          replyMessage += `\n🍎 下載Apple日曆: ${downloadUrl}`;
++          replyMessage += `\n   🍎 Apple 日曆: ${downloadUrl}`;
++        }
++
++        // 顯示批次處理統計
++        const successCount = googleBatchResults.filter(r => r.success).length;
++        if (parsedInfo.events.length > 1) {
++          replyMessage += `\n\n📊 批次處理結果: ${successCount}/${parsedInfo.events.length} 個事件成功新增至 Google 日曆`;
+         }
+       }
+ 
+diff --git a/src/services/googleCalendarManager.js b/src/services/googleCalendarManager.js
+index 6a6f66b..315a309 100644
+--- a/src/services/googleCalendarManager.js
++++ b/src/services/googleCalendarManager.js
+@@ -41,24 +41,153 @@ if (process.env.GOOGLE_CREDENTIALS_JSON) {
+ const calendar = google.calendar({ version: 'v3', auth });
+ 
+ /**
+- * 直接新增事件到 Google Calendar
+- * @param {object} event - 包含事件資訊的物件 { title, description, date }
++ * 列出所有可用的日曆 ID
++ * @returns {Promise<Array>} - 包含所有日曆資訊的陣列
++ */
++async function listCalendars() {
++  if (!auth) {
++    console.warn('未設定認證，無法列出日曆');
++    return [];
++  }
++  
++  try {
++    const res = await calendar.calendarList.list();
++    const calendars = res.data.items;
++    
++    console.log('📅 可用的日曆：');
++    calendars.forEach((cal) => {
++      console.log(`  • ${cal.summary}: ${cal.id}`);
++    });
++    
++    return calendars.map(cal => ({
++      id: cal.id,
++      name: cal.summary,
++      description: cal.description || '',
++      primary: cal.primary || false,
++      accessRole: cal.accessRole
++    }));
++  } catch (error) {
++    console.error('取得日曆清單失敗:', error);
++    return [];
++  }
++}
++
++/**
++ * 根據事件類型決定事件顏色和分類
++ * @param {string} eventType - 事件類型 (deadline, registration, start, end, etc.)
++ * @returns {object} - 包含顏色和分類資訊
++ */
++function getEventStyle(eventType) {
++  const eventStyles = {
++    'deadline': { colorId: '11', category: '截止日期' }, // 紅色
++    'registration': { colorId: '9', category: '報名日期' }, // 藍色
++    'start': { colorId: '10', category: '開始日期' }, // 綠色
++    'end': { colorId: '6', category: '結束日期' }, // 橙色
++    'participation': { colorId: '5', category: '參加日期' }, // 黃色
++    'reminder': { colorId: '1', category: '提醒事項' }, // 淡藍色
++    'meeting': { colorId: '7', category: '會議' }, // 青色
++    'event': { colorId: '2', category: '活動' }, // 淡綠色
++    'default': { colorId: '1', category: '其他' }
++  };
++  
++  return eventStyles[eventType] || eventStyles['default'];
++}
++
++/**
++ * 智能判斷事件類型
++ * @param {string} title - 事件標題
++ * @param {string} description - 事件描述
++ * @returns {string} - 事件類型
++ */
++function detectEventType(title, description = '') {
++  const content = (title + ' ' + description).toLowerCase();
++  
++  // 截止日期相關關鍵字
++  if (content.includes('截止') || content.includes('deadline') || content.includes('due') || 
++      content.includes('最後') || content.includes('結束報名') || content.includes('申請截止')) {
++    return 'deadline';
++  }
++  
++  // 報名相關關鍵字
++  if (content.includes('報名') || content.includes('註冊') || content.includes('registration') || 
++      content.includes('申請') || content.includes('登記') || content.includes('報名開始')) {
++    return 'registration';
++  }
++  
++  // 開始日期相關關鍵字
++  if (content.includes('開始') || content.includes('start') || content.includes('開幕') || 
++      content.includes('啟動') || content.includes('上線') || content.includes('發布')) {
++    return 'start';
++  }
++  
++  // 結束日期相關關鍵字
++  if (content.includes('結束') || content.includes('end') || content.includes('閉幕') || 
++      content.includes('完成') || content.includes('下線')) {
++    return 'end';
++  }
++  
++  // 參加日期相關關鍵字
++  if (content.includes('參加') || content.includes('出席') || content.includes('attend') || 
++      content.includes('參與') || content.includes('活動日') || content.includes('舉辦')) {
++    return 'participation';
++  }
++  
++  // 會議相關關鍵字
++  if (content.includes('會議') || content.includes('meeting') || content.includes('討論') || 
++      content.includes('座談') || content.includes('研討')) {
++    return 'meeting';
++  }
++  
++  return 'event';
++}
++
++/**
++ * 增強版新增事件到 Google Calendar
++ * @param {object} event - 包含事件資訊的物件 { title, description, date, type? }
++ * @param {string} calendarId - 指定的日曆ID，如果不提供則使用預設
+  * @returns {Promise<object>} - 包含成功資訊和事件連結
+  */
+-async function addEventToCalendar(event) {
+-  if (!auth || !CALENDAR_ID) {
+-    console.warn('未設定 GOOGLE_CALENDAR_ID 或認證失敗，跳過自動新增事件');
+-    return { success: false, message: '未設定 GOOGLE_CALENDAR_ID 或認證失敗' };
++async function addEventToCalendar(event, calendarId = null) {
++  if (!auth) {
++    console.warn('未設定認證，跳過自動新增事件');
++    return { success: false, message: '未設定認證' };
++  }
++  
++  const targetCalendarId = calendarId || CALENDAR_ID;
++  if (!targetCalendarId) {
++    console.warn('未設定 GOOGLE_CALENDAR_ID，跳過自動新增事件');
++    return { success: false, message: '未設定 GOOGLE_CALENDAR_ID' };
+   }
+   
+   try {
+     const eventStartTime = new Date(event.date);
+-    // 預設事件長度為1小時
+-    const eventEndTime = new Date(eventStartTime.getTime() + 60 * 60 * 1000);
++    
++    // 智能判斷事件類型
++    const eventType = event.type || detectEventType(event.title, event.description);
++    const eventStyle = getEventStyle(eventType);
++    
++    // 根據事件類型調整事件長度
++    let eventDuration = 60; // 預設1小時
++    if (eventType === 'deadline') {
++      eventDuration = 15; // 截止日期只需15分鐘提醒
++    } else if (eventType === 'meeting') {
++      eventDuration = 90; // 會議預設1.5小時
++    } else if (eventType === 'participation') {
++      eventDuration = 180; // 參加活動預設3小時
++    }
++    
++    const eventEndTime = new Date(eventStartTime.getTime() + eventDuration * 60 * 1000);
++
++    // 增強事件描述
++    const enhancedDescription = `${eventStyle.category}: ${event.description || event.title}
++    
++事件類型: ${eventStyle.category}
++建立時間: ${new Date().toLocaleString('zh-TW')}
++自動分類: ${eventType}`;
+ 
+     const calendarEvent = {
+-      summary: event.title,
+-      description: event.description,
++      summary: `[${eventStyle.category}] ${event.title}`,
++      description: enhancedDescription,
+       start: {
+         dateTime: eventStartTime.toISOString(),
+         timeZone: 'Asia/Taipei',
+@@ -67,18 +196,26 @@ async function addEventToCalendar(event) {
+         dateTime: eventEndTime.toISOString(),
+         timeZone: 'Asia/Taipei',
+       },
++      colorId: eventStyle.colorId,
++      // 根據事件類型設定提醒
++      reminders: {
++        useDefault: false,
++        overrides: getEventReminders(eventType)
++      }
+     };
+ 
+     const response = await calendar.events.insert({
+-      calendarId: CALENDAR_ID,
++      calendarId: targetCalendarId,
+       resource: calendarEvent,
+     });
+     
+-    console.log('成功新增事件到 Google Calendar:', response.data.summary);
++    console.log(`✅ 成功新增${eventStyle.category}到 Google Calendar: ${event.title}`);
+     return {
+       success: true,
+-      message: '已自動新增至 Google Calendar',
++      message: `已自動新增${eventStyle.category}至 Google Calendar`,
+       url: response.data.htmlLink,
++      eventType: eventType,
++      category: eventStyle.category
+     };
+   } catch (error) {
+     console.error('新增事件到 Google Calendar 失敗:', error.message);
+@@ -89,6 +226,79 @@ async function addEventToCalendar(event) {
+   }
+ }
+ 
++/**
++ * 根據事件類型設定提醒
++ * @param {string} eventType - 事件類型
++ * @returns {Array} - 提醒設定陣列
++ */
++function getEventReminders(eventType) {
++  const reminderSettings = {
++    'deadline': [
++      { method: 'popup', minutes: 60 * 24 }, // 1天前
++      { method: 'popup', minutes: 60 * 2 },  // 2小時前
++      { method: 'popup', minutes: 15 }       // 15分鐘前
++    ],
++    'registration': [
++      { method: 'popup', minutes: 60 * 24 }, // 1天前
++      { method: 'popup', minutes: 60 }       // 1小時前
++    ],
++    'meeting': [
++      { method: 'popup', minutes: 15 },      // 15分鐘前
++      { method: 'popup', minutes: 5 }        // 5分鐘前
++    ],
++    'participation': [
++      { method: 'popup', minutes: 60 * 24 }, // 1天前
++      { method: 'popup', minutes: 60 }       // 1小時前
++    ],
++    'default': [
++      { method: 'popup', minutes: 15 }       // 15分鐘前
++    ]
++  };
++  
++  return reminderSettings[eventType] || reminderSettings['default'];
++}
++
++/**
++ * 批次新增多個事件到 Google Calendar
++ * @param {Array} events - 事件陣列
++ * @param {string} calendarId - 指定的日曆ID
++ * @returns {Promise<Array>} - 處理結果陣列
++ */
++async function addMultipleEvents(events, calendarId = null) {
++  if (!events || events.length === 0) {
++    return [];
++  }
++  
++  console.log(`📅 開始批次新增 ${events.length} 個事件到 Google Calendar`);
++  
++  const results = [];
++  for (const event of events) {
++    try {
++      const result = await addEventToCalendar(event, calendarId);
++      results.push({ event: event.title, ...result });
++      
++      // 避免API速率限制
++      await new Promise(resolve => setTimeout(resolve, 100));
++    } catch (error) {
++      console.error(`新增事件失敗: ${event.title}`, error);
++      results.push({ 
++        event: event.title, 
++        success: false, 
++        message: error.message 
++      });
++    }
++  }
++  
++  const successCount = results.filter(r => r.success).length;
++  console.log(`📅 批次新增完成: ${successCount}/${events.length} 個事件成功`);
++  
++  return results;
++}
++
+ module.exports = {
+   addEventToCalendar,
++  addMultipleEvents,
++  listCalendars,
++  detectEventType,
++  getEventStyle
+ }; 
+\ No newline at end of file
+diff --git a/src/services/llmParser.js b/src/services/llmParser.js
+index 67c0b7d..2078e86 100644
+--- a/src/services/llmParser.js
++++ b/src/services/llmParser.js
+@@ -118,21 +118,38 @@ const CATEGORY_TAGS = {
+   "旅遊": ["旅遊規劃", "住宿預訂", "交通", "地圖"]
+ };
+ 
+-// 【新】使用 LLM 提取日期和時間資訊
++// 【增強】使用 LLM 提取日期和時間資訊，支援多種事件類型
+ async function extractDateTimeInfo(websiteData) {
+   const content = `${websiteData.title}\n${websiteData.description}\n${websiteData.rawContent.substring(0, 15000)}`;
+   
+   const prompt = `
+     你是一個專門從文本中提取事件和日期的AI助理。請仔細閱讀以下網站內容，找出所有重要的日期和時間。
+-    對於每一個找到的事件，請提供一個簡短的標題（例如：「報名截止」、「活動開始」）和一個精確的日期時間。
++    對於每一個找到的事件，請提供標題、事件類型、和精確的日期時間。
++    
++    事件類型分類：
++    - "deadline": 截止日期、申請截止、報名截止、最後期限
++    - "registration": 報名開始、註冊開放、申請開始、登記開始
++    - "start": 活動開始、開幕、啟動、上線、發布
++    - "end": 活動結束、閉幕、完成、下線
++    - "participation": 參加日期、出席日期、活動舉辦日
++    - "meeting": 會議、座談會、研討會、討論會
++    - "reminder": 提醒事項、重要通知
++    - "event": 其他一般事件
+     
+     規則：
+-    1.  只回傳有效的、未來的日期。忽略過去的日期。
+-    2.  如果年份不明確，請根據當前年份（${new Date().getFullYear()}）進行推斷。
+-    3.  如果只提到日期但沒有時間，請將時間預設為當天的 23:59。
+-    4.  將提取的日期和時間轉換為 "YYYY-MM-DDTHH:mm:ss" 的 ISO 8601 格式。
+-    5.  最終結果必須是 JSON 格式的陣列，格式為：[{"title": "事件標題", "iso_datetime": "YYYY-MM-DDTHH:mm:ss", "description": "人類可讀的描述"}]。
+-    6.  如果沒有找到任何有效日期，請回傳一個空陣列 []。
++    1. 只回傳有效的、未來的日期。忽略過去的日期。
++    2. 如果年份不明確，請根據當前年份（${new Date().getFullYear()}）進行推斷。
++    3. 如果只提到日期但沒有時間，請根據事件類型設定合理時間：
++       - deadline: 23:59
++       - registration: 09:00
++       - start/meeting: 10:00
++       - end: 18:00
++       - participation: 14:00
++       - 其他: 12:00
++    4. 將提取的日期和時間轉換為 "YYYY-MM-DDTHH:mm:ss" 的 ISO 8601 格式。
++    5. 最終結果必須是 JSON 格式的陣列，格式為：
++       [{"title": "事件標題", "type": "事件類型", "iso_datetime": "YYYY-MM-DDTHH:mm:ss", "description": "詳細描述"}]
++    6. 如果沒有找到任何有效日期，請回傳一個空陣列 []。
+ 
+     網站內容如下：
+     """
+@@ -162,7 +179,7 @@ async function extractDateTimeInfo(websiteData) {
+           // 再次確認日期是有效的並且是未來的
+           if (!isNaN(eventDate.getTime()) && eventDate > new Date()) {
+             events.push({
+-              type: 'deadline', // 保持類型一致
++              type: ev.type || 'event', // 使用 LLM 判斷的事件類型
+               title: ev.title,
+               date: eventDate,
+               description: ev.description || `${ev.title}: ${eventDate.toLocaleString('zh-TW')}`
+@@ -171,6 +188,12 @@ async function extractDateTimeInfo(websiteData) {
+         }
+       }
+     }
++    
++    console.log(`📅 從網站內容中提取到 ${events.length} 個事件`);
++    events.forEach(event => {
++      console.log(`  • [${event.type}] ${event.title} - ${event.date.toLocaleString('zh-TW')}`);
++    });
++    
+     return events;
+   } catch (error) {
+     console.error('使用 LLM 提取日期時發生錯誤:', error);
+-- 
+2.49.0
+
