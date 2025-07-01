@@ -4,6 +4,7 @@ const line = require('@line/bot-sdk');
 const llmParser = require('./services/llmParser');
 const notionManager = require('./services/notionManager');
 const googleCalendarManager = require('./services/googleCalendarManager');
+const { shortenUrl } = require('./services/urlShortener');
 const http = require('http'); // 用於健康檢查
 const { exec } = require('child_process'); // 用於網路偵測
 const os = require('os');
@@ -14,8 +15,17 @@ const requiredEnvVars = [
   'LINE_CHANNEL_SECRET',
   'GEMINI_API_KEY',
   'NOTION_API_TOKEN',
-  'NOTION_DATABASE_ID'
+  'NOTION_DATABASE_ID',
+  'BASE_URL'
 ];
+
+// 檢查可選的環境變數
+const optionalEnvVars = ['GOOGLE_CALENDAR_ID'];
+const missingOptionalVars = optionalEnvVars.filter(varName => !process.env[varName]);
+if (missingOptionalVars.length > 0) {
+  console.warn('Missing optional environment variables:', missingOptionalVars);
+  console.warn('Some features may not work properly');
+}
 
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 if (missingVars.length > 0) {
@@ -410,18 +420,40 @@ async function handleEvent(event) {
       });
     }
 
-    let notionResult = await notionManager.saveToNotion(parsedInfo);
+    // 修正：parsedInfo 是陣列，需要取第一個元素
+    const firstItem = Array.isArray(parsedInfo) ? parsedInfo[0] : parsedInfo;
+    console.log('🔍 準備儲存到 Notion 的資料:', JSON.stringify(firstItem, null, 2));
+    
+    // 縮短 URL（如果需要）
+    if (firstItem.url && firstItem.url.length > 100) {
+      console.log('🔗 URL 過長，開始縮短...');
+      const shortUrl = await shortenUrl(firstItem.url);
+      if (shortUrl !== firstItem.url) {
+        console.log(`✅ URL 縮短成功: ${firstItem.url.substring(0, 50)}... -> ${shortUrl}`);
+        firstItem.url = shortUrl;
+      } else {
+        console.log('⚠️  URL 縮短失敗，使用原始 URL');
+      }
+    }
+    
+    let notionResult = await notionManager.saveToNotion(firstItem);
 
     // 如果 Notion 儲存失敗，嘗試降級處理
-    if (!notionResult.success && parsedInfo) {
+    if (!notionResult.success && firstItem) {
       console.log('🔄 Notion 儲存失敗，嘗試降級處理...');
       
       // 嘗試簡化資料格式重新儲存
+      let simplifiedUrl = firstItem.url;
+      if (simplifiedUrl && simplifiedUrl.length > 100) {
+        console.log('🔗 降級處理中縮短 URL...');
+        simplifiedUrl = await shortenUrl(simplifiedUrl);
+      }
+      
       const simplifiedData = {
-        title: parsedInfo.title || parsedInfo.url || '未知標題',
-        category: parsedInfo.category || '其他',
-        info: parsedInfo.info || '自動分析的內容',
-        url: parsedInfo.url
+        title: firstItem.title || firstItem.url || '未知標題',
+        category: firstItem.category || '其他',
+        info: firstItem.info || '自動分析的內容',
+        url: simplifiedUrl
       };
       
       console.log('📝 使用簡化資料重新嘗試:', JSON.stringify(simplifiedData, null, 2));
@@ -442,14 +474,21 @@ async function handleEvent(event) {
     if (notionResult.success) {
       let replyMessage = `✅ 已成功儲存：${notionResult.title}\n${notionResult.url}`;
 
+      // 調試輸出：檢查 parsedInfo 結構
+      console.log('🔍 調試 - parsedInfo 結構:', JSON.stringify(parsedInfo, null, 2));
+      const firstItem = Array.isArray(parsedInfo) ? parsedInfo[0] : parsedInfo;
+      console.log('🔍 調試 - firstItem.events:', firstItem.events);
+      console.log('🔍 調試 - events 長度:', firstItem.events ? firstItem.events.length : 'undefined');
+
       // 【增強】處理日曆事件並產生連結 - 支援多種事件類型
-      if (parsedInfo.events && parsedInfo.events.length > 0) {
+      if (firstItem.events && firstItem.events.length > 0) {
+        console.log('📅 開始處理日曆事件...');
         replyMessage += '\n\n📅 發現重要日期：';
 
         // 批次新增到 Google Calendar
-        const googleBatchResults = await googleCalendarManager.addMultipleEvents(parsedInfo.events);
+        const googleBatchResults = await googleCalendarManager.addMultipleEvents(firstItem.events);
 
-        for (const [index, calEvent] of parsedInfo.events.entries()) {
+        for (const [index, calEvent] of firstItem.events.entries()) {
           const eventTypeEmoji = {
             'deadline': '⏰',
             'registration': '📝',
@@ -475,25 +514,28 @@ async function handleEvent(event) {
           if (googleResult?.success) {
             replyMessage += `\n   ✅ 已自動新增至 Google 日曆`;
             if (googleResult.url) {
-              replyMessage += `\n   🔗 查看: ${googleResult.url}`;
+              const shortGoogleUrl = await shortenUrl(googleResult.url);
+              replyMessage += `\n   🔗 查看: ${shortGoogleUrl}`;
             }
           } else {
             // 自動新增失敗，提供手動連結
             replyMessage += `\n   ⚠️  Google 日曆: ${googleResult?.message || '新增失敗'}`;
             const googleLink = llmParser.generateGoogleCalendarLink(calEvent);
-            replyMessage += `\n   🔗 手動新增: ${googleLink}`;
+            const shortGoogleLink = await shortenUrl(googleLink);
+            replyMessage += `\n   🔗 手動新增: ${shortGoogleLink}`;
           }
 
           // 產生 Apple 日曆下載連結
           const eventId = `${Date.now()}-${index}`;
           const downloadUrl = `${process.env.BASE_URL || 'https://line-helper.onrender.com'}/download-ics/${eventId}?title=${encodeURIComponent(calEvent.title)}&description=${encodeURIComponent(calEvent.description)}&date=${calEvent.date.toISOString()}`;
-          replyMessage += `\n   🍎 Apple 日曆: ${downloadUrl}`;
+          const shortDownloadUrl = await shortenUrl(downloadUrl);
+          replyMessage += `\n   🍎 Apple 日曆: ${shortDownloadUrl}`;
         }
 
         // 顯示批次處理統計
         const successCount = googleBatchResults.filter(r => r.success).length;
-        if (parsedInfo.events.length > 1) {
-          replyMessage += `\n\n📊 批次處理結果: ${successCount}/${parsedInfo.events.length} 個事件成功新增至 Google 日曆`;
+        if (firstItem.events.length > 1) {
+          replyMessage += `\n\n📊 批次處理結果: ${successCount}/${firstItem.events.length} 個事件成功新增至 Google 日曆`;
         }
       }
 
@@ -513,13 +555,13 @@ async function handleEvent(event) {
       let replyMessage = `⚠️ 儲存到 Notion 失敗，但已處理其他功能\n錯誤：${notionResult.error}`;
 
       // 處理日曆事件（即使 Notion 失敗）
-      if (parsedInfo && parsedInfo.events && parsedInfo.events.length > 0) {
+      if (firstItem && firstItem.events && firstItem.events.length > 0) {
         replyMessage += '\n\n📅 發現重要日期：';
 
         // 批次新增到 Google Calendar
-        const googleBatchResults = await googleCalendarManager.addMultipleEvents(parsedInfo.events);
+        const googleBatchResults = await googleCalendarManager.addMultipleEvents(firstItem.events);
 
-        for (const [index, calEvent] of parsedInfo.events.entries()) {
+        for (const [index, calEvent] of firstItem.events.entries()) {
           const eventTypeEmoji = {
             'deadline': '⏰',
             'registration': '📝',
@@ -615,6 +657,18 @@ app.listen(port, '0.0.0.0', () => {
   });
   notionManager.getNotionData(); // 啟動時獲取 Notion 資料庫數據
   checkInternetConnection(); // 啟動時檢查網路連線
+  
+  // 診斷 Google Calendar 配置
+  if (process.env.GOOGLE_CALENDAR_ID) {
+    console.log('\n🔍 執行 Google Calendar 配置診斷...');
+    try {
+      await googleCalendarManager.diagnoseGoogleCalendar();
+    } catch (error) {
+      console.error('Google Calendar 診斷失敗:', error.message);
+    }
+  } else {
+    console.log('\n⚠️  未設定 GOOGLE_CALENDAR_ID，跳過 Google Calendar 診斷');
+  }
 });
 
 module.exports = app;

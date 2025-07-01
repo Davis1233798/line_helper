@@ -107,8 +107,8 @@ async function saveToNotion(data) {
     console.log("🎯 使用的標題欄位:", titleFieldName);
     console.log("📝 傳入的資料標題:", data.title);
 
-    // 智慧設定標題：優先使用動態找到的欄位名，如果該屬性不存在，則回退到通用的 'title' 屬性
-    const titleValue = data[titleFieldName] || data.title;
+    // 智慧設定標題：優先使用傳入資料的 title 屬性，然後是動態找到的欄位名
+    const titleValue = data.title || data[titleFieldName] || data.url || "未知標題";
 
     if (titleFieldName && titleValue) {
       properties[titleFieldName] = {

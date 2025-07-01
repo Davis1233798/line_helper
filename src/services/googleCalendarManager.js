@@ -1,52 +1,84 @@
 const { google } = require('googleapis');
 const path = require('path');
+const fs = require('fs');
 
 // 要操作的日曆ID
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID;
 
 // 設定認證
 let auth;
-if (process.env.GOOGLE_CREDENTIALS_JSON) {
-  // 生產環境：從環境變數讀取憑證
-  try {
-    // 解決從環境變數讀取時，換行符被轉義成 \\n 的問題
-    // 同時移除可能由複製貼上產生的非法控制字元
-    let credentialsString = process.env.GOOGLE_CREDENTIALS_JSON;
-    credentialsString = credentialsString.replace(/\\n/g, '\n');
-    credentialsString = credentialsString.replace(/[\x00-\x1F\x7F]/g, (match) => {
-      // 保留 private_key 中的 \n
-      if (match === '\n') return '\n';
-      return '';
-    });
-    
-    const credentials = JSON.parse(credentialsString);
-    auth = new google.auth.GoogleAuth({
-      credentials,
-      scopes: ['https://www.googleapis.com/auth/calendar'],
-    });
-  } catch (e) {
-    console.error('解析 GOOGLE_CREDENTIALS_JSON 環境變數失敗:', e);
-    // 可選：設定一個無效的auth，讓後續操作優雅地失敗
-    auth = null;
+
+// 優先順序：1. Render Secret Files 2. 本地開發檔案
+// 嘗試多個可能的 Secret Files 路徑
+const SECRET_FILE_PATHS = [
+  '/etc/secrets/google-credentials.json',
+  '/etc/secrets/strange-bloom-382507-11b0f2d5a164.json',
+  '/opt/render/project/src/google-credentials.json'
+];
+const LOCAL_FILE_PATH = path.join(__dirname, '../google-credentials.json');
+
+console.log('🔑 開始 Google Calendar 認證流程');
+
+// 1. 優先嘗試 Render Secret Files（多個路徑）
+let secretFileFound = false;
+for (const secretPath of SECRET_FILE_PATHS) {
+  if (fs.existsSync(secretPath)) {
+    console.log('📁 使用 Render Secret File 進行認證:', secretPath);
+    try {
+      auth = new google.auth.GoogleAuth({
+        keyFile: secretPath,
+        scopes: ['https://www.googleapis.com/auth/calendar'],
+      });
+      console.log('✅ 使用 Render Secret File 建立 Google Auth 成功');
+      secretFileFound = true;
+      break;
+    } catch (e) {
+      console.error('❌ 使用 Render Secret File 失敗:', e.message);
+      auth = null;
+    }
   }
-} else {
-  // 開發環境：從本地檔案讀取憑證
-  const KEYFILEPATH = path.join(__dirname, '../../google-credentials.json');
-  auth = new google.auth.GoogleAuth({
-    keyFile: KEYFILEPATH,
-    scopes: ['https://www.googleapis.com/auth/calendar'],
-  });
 }
 
-const calendar = google.calendar({ version: 'v3', auth });
+// 2. 備用：本地開發檔案
+if (!secretFileFound && fs.existsSync(LOCAL_FILE_PATH)) {
+  console.log('📁 Secret File 不存在，使用本地開發檔案:', LOCAL_FILE_PATH);
+  try {
+    auth = new google.auth.GoogleAuth({
+      keyFile: LOCAL_FILE_PATH,
+      scopes: ['https://www.googleapis.com/auth/calendar'],
+    });
+    console.log('✅ 使用本地憑證檔案建立 Google Auth 成功');
+  } catch (e) {
+    console.error('❌ 使用本地憑證檔案失敗:', e.message);
+    auth = null;
+  }
+} else if (!secretFileFound) {
+  console.error('❌ 找不到任何 Google 憑證檔案');
+  console.error('🔍 檢查的路徑:');
+  SECRET_FILE_PATHS.forEach(path => {
+    console.error(`   - Render Secret File: ${path}`);
+  });
+  console.error(`   - 本地開發檔案: ${LOCAL_FILE_PATH}`);
+  console.error('🔧 請確認以下配置:');
+  console.error('   1. 在 Render Secret Files 中上傳 google-credentials.json 檔案');
+  console.error('   2. 在本地開發時放置 google-credentials.json 檔案');
+  console.error('   3. 確認憑證檔案格式正確且包含所需權限');
+  auth = null;
+}
+
+// calendar 物件將在需要時動態建立
+let calendar = null;
+if (auth) {
+  calendar = google.calendar({ version: 'v3', auth });
+}
 
 /**
  * 列出所有可用的日曆 ID
  * @returns {Promise<Array>} - 包含所有日曆資訊的陣列
  */
 async function listCalendars() {
-  if (!auth) {
-    console.warn('未設定認證，無法列出日曆');
+  if (!auth || !calendar) {
+    console.warn('未設定認證或 Google Calendar 服務未初始化，無法列出日曆');
     return [];
   }
   
@@ -148,9 +180,9 @@ function detectEventType(title, description = '') {
  * @returns {Promise<object>} - 包含成功資訊和事件連結
  */
 async function addEventToCalendar(event, calendarId = null) {
-  if (!auth) {
-    console.warn('未設定認證，跳過自動新增事件');
-    return { success: false, message: '未設定認證' };
+  if (!auth || !calendar) {
+    console.warn('未設定認證或 Google Calendar 服務未初始化，跳過自動新增事件');
+    return { success: false, message: '未設定認證或 Google Calendar 服務未初始化' };
   }
   
   const targetCalendarId = calendarId || CALENDAR_ID;
@@ -219,9 +251,22 @@ async function addEventToCalendar(event, calendarId = null) {
     };
   } catch (error) {
     console.error('新增事件到 Google Calendar 失敗:', error.message);
+    
+    // 根據錯誤類型提供具體的解決建議
     if (error.message.includes('file')) {
       return { success: false, message: 'Google服務帳號金鑰檔案未找到或設定錯誤。' };
+    } else if (error.message.includes('writer access') || error.message.includes('permission')) {
+      return { 
+        success: false, 
+        message: `權限不足: ${error.message}\n\n🔧 解決方案:\n1. 確認 Google Calendar ID 是否正確\n2. 檢查服務帳號是否有該日曆的編輯權限\n3. 在 Google Calendar 中將服務帳號電子郵件加入為編輯者` 
+      };
+    } else if (error.message.includes('not found') || error.message.includes('404')) {
+      return { 
+        success: false, 
+        message: `找不到指定的日曆: ${error.message}\n\n🔧 解決方案:\n1. 檢查 GOOGLE_CALENDAR_ID 環境變數是否正確\n2. 確認日曆 ID 格式正確（通常是 email 格式）` 
+      };
     }
+    
     return { success: false, message: `新增至 Google Calendar 失敗: ${error.message}` };
   }
 }
@@ -295,10 +340,74 @@ async function addMultipleEvents(events, calendarId = null) {
   return results;
 }
 
+/**
+ * 診斷 Google Calendar 配置狀態
+ * @returns {Object} - 診斷結果
+ */
+async function diagnoseGoogleCalendar() {
+  const diagnosis = {
+    authStatus: !!auth,
+    calendarServiceStatus: !!calendar,
+    calendarIdSet: !!CALENDAR_ID,
+    calendarId: CALENDAR_ID,
+    recommendations: []
+  };
+  
+  console.log('🔍 Google Calendar 配置診斷:');
+  console.log(`   認證狀態: ${diagnosis.authStatus ? '✅ 成功' : '❌ 失敗'}`);
+  console.log(`   Calendar 服務: ${diagnosis.calendarServiceStatus ? '✅ 已初始化' : '❌ 未初始化'}`);
+  console.log(`   Calendar ID: ${diagnosis.calendarIdSet ? '✅ 已設定' : '❌ 未設定'} (${CALENDAR_ID || '未設定'})`);
+  
+  if (!diagnosis.authStatus) {
+    diagnosis.recommendations.push('請檢查 Google 憑證檔案是否正確配置');
+  }
+  
+  if (!diagnosis.calendarIdSet) {
+    diagnosis.recommendations.push('請設定 GOOGLE_CALENDAR_ID 環境變數');
+  }
+  
+  if (diagnosis.authStatus && diagnosis.calendarServiceStatus && diagnosis.calendarIdSet) {
+    try {
+      // 嘗試列出日曆以測試權限
+      const calendars = await listCalendars();
+      const targetCalendar = calendars.find(cal => cal.id === CALENDAR_ID);
+      
+      if (targetCalendar) {
+        console.log(`   目標日曆: ✅ 找到 "${targetCalendar.name}" (權限: ${targetCalendar.accessRole})`);
+        diagnosis.targetCalendarFound = true;
+        diagnosis.accessRole = targetCalendar.accessRole;
+        
+        if (!targetCalendar.accessRole.includes('writer') && !targetCalendar.accessRole.includes('owner')) {
+          diagnosis.recommendations.push('服務帳號對目標日曆沒有寫入權限，請在 Google Calendar 中將服務帳號加入為編輯者');
+        }
+      } else {
+        console.log(`   目標日曆: ❌ 找不到 ID 為 "${CALENDAR_ID}" 的日曆`);
+        diagnosis.targetCalendarFound = false;
+        diagnosis.recommendations.push('找不到指定的日曆 ID，請檢查 GOOGLE_CALENDAR_ID 是否正確');
+      }
+    } catch (error) {
+      console.log(`   權限測試: ❌ ${error.message}`);
+      diagnosis.recommendations.push(`權限測試失敗: ${error.message}`);
+    }
+  }
+  
+  if (diagnosis.recommendations.length > 0) {
+    console.log('🔧 建議解決方案:');
+    diagnosis.recommendations.forEach((rec, index) => {
+      console.log(`   ${index + 1}. ${rec}`);
+    });
+  } else {
+    console.log('✅ Google Calendar 配置正常');
+  }
+  
+  return diagnosis;
+}
+
 module.exports = {
   addEventToCalendar,
   addMultipleEvents,
   listCalendars,
   detectEventType,
-  getEventStyle
-}; 
+  getEventStyle,
+  diagnoseGoogleCalendar
+};
