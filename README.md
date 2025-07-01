@@ -50,6 +50,39 @@
 - **Notion API**：資料庫操作
 - **Google Calendar API**：行事曆整合
 
+## 🛠️ 最新修復 (2024)
+
+### 修復的問題
+1. **Notion API 連線逾時問題**
+   - 增加 30 秒超時設定
+   - 實作自動重試機制（最多 3 次）
+   - 背景重試機制，避免阻塞應用程式啟動
+   - 減少每次請求的資料量，提高穩定性
+
+2. **Google Calendar ID 配置問題**
+   - 自動偵測並使用主要日曆
+   - 智慧日曆 ID 解析
+   - 改善錯誤診斷和建議
+   - 動態日曆 ID 更新
+
+3. **錯誤處理增強**
+   - 網路錯誤自動重試
+   - 更詳細的錯誤訊息
+   - 非阻塞式初始化
+
+### 部署建議
+1. **環境變數設定**
+   ```bash
+   # Google Calendar ID 可以設定為 'primary' 或留空
+   GOOGLE_CALENDAR_ID=primary
+   ```
+
+2. **Render 部署注意事項**
+   - 確保 Google 憑證檔案正確上傳到 Secret Files
+   - Notion API Token 權限正確設定
+   - 網路連線可能需要較長時間建立
+- **Google Calendar API**：行事曆整合
+
 ### 服務架構
 ```
 Line 用戶 → Line Bot → Express Server → AI 分析 → Notion 儲存
@@ -211,4 +244,4 @@ MIT License
 
 ---
 
-**注意**：本專案需要相應的 API 配額和權限，請確保所有服務正確設定後再部署使用。 
+**注意**：本專案需要相應的 API 配額和權限，請確保所有服務正確設定後再部署使用。

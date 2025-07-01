@@ -88,8 +88,14 @@ async function listCalendars() {
     
     console.log('📅 可用的日曆：');
     calendars.forEach((cal) => {
-      console.log(`  • ${cal.summary}: ${cal.id}`);
+      console.log(`  • ${cal.summary}: ${cal.id} (主要: ${cal.primary ? '是' : '否'}, 權限: ${cal.accessRole})`);
     });
+    
+    // 如果找不到指定的日曆，建議使用主要日曆
+    const primaryCalendar = calendars.find(cal => cal.primary);
+    if (primaryCalendar && CALENDAR_ID !== primaryCalendar.id) {
+      console.log(`💡 建議：如果要使用主要日曆，請將 GOOGLE_CALENDAR_ID 設定為: ${primaryCalendar.id}`);
+    }
     
     return calendars.map(cal => ({
       id: cal.id,
@@ -185,10 +191,24 @@ async function addEventToCalendar(event, calendarId = null) {
     return { success: false, message: '未設定認證或 Google Calendar 服務未初始化' };
   }
   
-  const targetCalendarId = calendarId || CALENDAR_ID;
+  let targetCalendarId = calendarId || CALENDAR_ID;
+  
+  // 如果沒有指定日曆 ID，嘗試使用主要日曆
   if (!targetCalendarId) {
-    console.warn('未設定 GOOGLE_CALENDAR_ID，跳過自動新增事件');
-    return { success: false, message: '未設定 GOOGLE_CALENDAR_ID' };
+    try {
+      const calendars = await listCalendars();
+      const primaryCalendar = calendars.find(cal => cal.primary);
+      if (primaryCalendar) {
+        targetCalendarId = primaryCalendar.id;
+        console.log(`📅 使用主要日曆: ${primaryCalendar.name}`);
+      } else {
+        console.warn('找不到可用的日曆，跳過自動新增事件');
+        return { success: false, message: '找不到可用的日曆' };
+      }
+    } catch (error) {
+      console.warn('無法取得日曆清單，跳過自動新增事件');
+      return { success: false, message: '無法取得日曆清單' };
+    }
   }
   
   try {
@@ -366,24 +386,51 @@ async function diagnoseGoogleCalendar() {
     diagnosis.recommendations.push('請設定 GOOGLE_CALENDAR_ID 環境變數');
   }
   
-  if (diagnosis.authStatus && diagnosis.calendarServiceStatus && diagnosis.calendarIdSet) {
+  if (diagnosis.authStatus && diagnosis.calendarServiceStatus) {
     try {
       // 嘗試列出日曆以測試權限
       const calendars = await listCalendars();
-      const targetCalendar = calendars.find(cal => cal.id === CALENDAR_ID);
+      
+      if (calendars.length === 0) {
+        console.log('   目標日曆: ❌ 無法取得日曆清單');
+        diagnosis.recommendations.push('無法取得日曆清單，請檢查服務帳號權限');
+        return diagnosis;
+      }
+      
+      let targetCalendar = null;
+      
+      // 如果有設定 CALENDAR_ID，先嘗試找到指定的日曆
+      if (CALENDAR_ID) {
+        targetCalendar = calendars.find(cal => cal.id === CALENDAR_ID);
+      }
+      
+      // 如果找不到指定日曆或沒有設定，使用主要日曆
+      if (!targetCalendar) {
+        targetCalendar = calendars.find(cal => cal.primary);
+        
+        if (targetCalendar) {
+          console.log(`   目標日曆: ⚠️  使用主要日曆 "${targetCalendar.name}" (${targetCalendar.id})`);
+          if (CALENDAR_ID && CALENDAR_ID !== targetCalendar.id) {
+            diagnosis.recommendations.push(`建議將 GOOGLE_CALENDAR_ID 更新為主要日曆: ${targetCalendar.id}`);
+          }
+          // 自動更新 CALENDAR_ID 為主要日曆
+          process.env.GOOGLE_CALENDAR_ID = targetCalendar.id;
+        }
+      }
       
       if (targetCalendar) {
         console.log(`   目標日曆: ✅ 找到 "${targetCalendar.name}" (權限: ${targetCalendar.accessRole})`);
         diagnosis.targetCalendarFound = true;
         diagnosis.accessRole = targetCalendar.accessRole;
+        diagnosis.actualCalendarId = targetCalendar.id;
         
         if (!targetCalendar.accessRole.includes('writer') && !targetCalendar.accessRole.includes('owner')) {
           diagnosis.recommendations.push('服務帳號對目標日曆沒有寫入權限，請在 Google Calendar 中將服務帳號加入為編輯者');
         }
       } else {
-        console.log(`   目標日曆: ❌ 找不到 ID 為 "${CALENDAR_ID}" 的日曆`);
+        console.log('   目標日曆: ❌ 找不到可用的日曆');
         diagnosis.targetCalendarFound = false;
-        diagnosis.recommendations.push('找不到指定的日曆 ID，請檢查 GOOGLE_CALENDAR_ID 是否正確');
+        diagnosis.recommendations.push('找不到可用的日曆，請檢查服務帳號是否有存取權限');
       }
     } catch (error) {
       console.log(`   權限測試: ❌ ${error.message}`);

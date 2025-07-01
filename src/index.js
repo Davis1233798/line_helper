@@ -655,7 +655,11 @@ app.listen(port, '0.0.0.0', async () => {
     hasGoogleCalId: !!process.env.GOOGLE_CALENDAR_ID,
     hasBaseUrl: !!process.env.BASE_URL
   });
-  notionManager.getNotionData(); // 啟動時獲取 Notion 資料庫數據
+  // 非阻塞方式獲取 Notion 資料庫數據
+  notionManager.getNotionData().catch(error => {
+    console.error('⚠️  啟動時獲取 Notion 資料失敗，將在背景重試:', error.message);
+  });
+  
   checkInternetConnection(); // 啟動時檢查網路連線
   
   // 診斷 Google Calendar 配置

@@ -1,6 +1,10 @@
 const { Client } = require('@notionhq/client');
 
-const notion = new Client({ auth: process.env.NOTION_API_TOKEN });
+// 建立 Notion 客戶端，增加超時設定
+const notion = new Client({ 
+  auth: process.env.NOTION_API_TOKEN,
+  timeoutMs: 30000 // 30秒超時
+});
 const databaseId = process.env.NOTION_DATABASE_ID;
 
 // 檢查URL是否已存在於資料庫中
@@ -247,8 +251,13 @@ async function saveToNotion(data) {
 }
 
 // 獲取所有Notion資料以供本地快取或搜尋
-async function getNotionData() {
+async function getNotionData(retryCount = 0) {
+  const maxRetries = 3;
+  const retryDelay = 5000; // 5秒
+  
   try {
+    console.log(`🔄 嘗試連接 Notion API... (第 ${retryCount + 1} 次)`);
+    
     const allPages = [];
     let hasMore = true;
     let startCursor = undefined;
@@ -257,15 +266,20 @@ async function getNotionData() {
       const response = await notion.databases.query({
         database_id: databaseId,
         start_cursor: startCursor,
-        page_size: 100
+        page_size: 50 // 減少每次請求的數量
       });
 
       allPages.push(...response.results);
       hasMore = response.has_more;
       startCursor = response.next_cursor;
+      
+      // 在請求之間增加小延遲
+      if (hasMore) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
     }
     
-    console.log(`從 Notion 獲取了 ${allPages.length} 筆資料`);
+    console.log(`✅ 從 Notion 成功獲取了 ${allPages.length} 筆資料`);
 
     // 將頁面轉換為簡化格式
     const simplifiedData = allPages.map(page => {
@@ -294,7 +308,31 @@ async function getNotionData() {
     return simplifiedData;
 
   } catch (error) {
-    console.error('從 Notion 獲取資料時發生錯誤：', error);
+    console.error(`❌ 從 Notion 獲取資料時發生錯誤 (第 ${retryCount + 1} 次):`, error.message);
+    
+    // 如果是網路相關錯誤且還有重試次數，則重試
+    if (retryCount < maxRetries && 
+        (error.code === 'ETIMEDOUT' || 
+         error.code === 'ECONNRESET' || 
+         error.code === 'ENOTFOUND' ||
+         error.message.includes('fetch failed') ||
+         error.message.includes('timeout'))) {
+      
+      console.log(`⏳ ${retryDelay/1000} 秒後重試...`);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+      return getNotionData(retryCount + 1);
+    }
+    
+    console.error('🚫 Notion API 連線失敗，將在背景繼續嘗試');
+    
+    // 在背景每 30 秒重試一次
+    if (retryCount === 0) {
+      setTimeout(() => {
+        console.log('🔄 背景重試 Notion 連線...');
+        getNotionData(0);
+      }, 30000);
+    }
+    
     return [];
   }
 }
