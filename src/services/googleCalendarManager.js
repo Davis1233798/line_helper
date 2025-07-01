@@ -83,8 +83,21 @@ async function listCalendars() {
   }
   
   try {
+    console.log('🔍 正在取得 Google Calendar 清單...');
     const res = await calendar.calendarList.list();
+    
+    if (!res.data || !res.data.items) {
+      console.error('❌ Google Calendar API 回應格式異常:', res.data);
+      return [];
+    }
+    
     const calendars = res.data.items;
+    console.log(`📅 成功取得 ${calendars.length} 個日曆`);
+    
+    if (calendars.length === 0) {
+      console.warn('⚠️  沒有找到任何日曆，請檢查服務帳號權限');
+      return [];
+    }
     
     console.log('📅 可用的日曆：');
     calendars.forEach((cal) => {
@@ -105,7 +118,26 @@ async function listCalendars() {
       accessRole: cal.accessRole
     }));
   } catch (error) {
-    console.error('取得日曆清單失敗:', error);
+    console.error('❌ 取得日曆清單失敗:');
+    console.error('   錯誤類型:', error.constructor.name);
+    console.error('   錯誤訊息:', error.message);
+    if (error.response) {
+      console.error('   HTTP 狀態:', error.response.status);
+      console.error('   回應資料:', error.response.data);
+    }
+    if (error.code) {
+      console.error('   錯誤代碼:', error.code);
+    }
+    
+    // 提供具體的解決建議
+    if (error.message.includes('insufficient authentication scopes')) {
+      console.error('🔧 解決方案: 服務帳號缺少 Calendar 權限，請檢查 OAuth 範圍設定');
+    } else if (error.message.includes('forbidden') || error.response?.status === 403) {
+      console.error('🔧 解決方案: 服務帳號被拒絕存取，請檢查 API 啟用狀態和權限設定');
+    } else if (error.message.includes('not found') || error.response?.status === 404) {
+      console.error('🔧 解決方案: Calendar API 端點不存在，請檢查 API 版本和設定');
+    }
+    
     return [];
   }
 }
