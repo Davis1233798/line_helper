@@ -466,7 +466,7 @@ async function parseMessage(message) {
 
   if (!urls || urls.length === 0) {
     const analysisResult = await analyzeTextFunction(message);
-    return [{...analysisResult, url: '', events: []}];
+    return [{...analysisResult, url: ''}];
   } else if (urls.length === 1) {
     return parseSingleMessage(message, urls);
   } else {
@@ -542,17 +542,36 @@ async function fuzzySearch(query, searchData) {
 }
 
 async function analyzeTextFunction(message) {
+  const currentYear = new Date().getFullYear();
   const prompt = `
   你是一個專業的內容分析師，你的任務是從給定的文本中提取結構化資訊。
   請遵循以下規則：
 
-  1.  **標題 (title)**: 提取最合適、最簡潔的主標題。這是最重要的欄位，必須提供。
+  1.  **標題 (title)**: 提取最合適、最簡潔的主標題。如果文本包含會議或事件資訊，請以事件主題作為標題。這是最重要的欄位，必須提供，絕對不能是空字串或「未知標題」。
   2.  **分類 (category)**: 從以下列表中選擇一個最符合的分類：[${VALID_CATEGORIES.join(', ')}]。
-  3.  **標籤 (tags)**: 根據內容生成5到8個相關的關鍵字標籤，以便於搜尋和分類。
-  4.  **摘要 (info)**: 產生一段約100-150字的摘要，總結文本的核心內容。
-  5.  **事件 (events)**: 如果文本中包含日期和時間，提取它們。格式為 {type, title, date, description} 的陣列。
+  3.  **標籤 (tags)**: 根據內容生成3到5個相關的關鍵字標籤，以便於搜尋和分類。
+  4.  **摘要 (info)**: 產生一段約50-100字的摘要，總結文本的核心內容。
+  5.  **事件 (events)**: 仔細分析文本中的日期和時間資訊，提取所有相關事件。
+     - 事件類型分類：meeting, deadline, event, reminder, appointment
+     - 日期格式：必須轉換為 "YYYY-MM-DDTHH:mm:ss" 的 ISO 8601 格式
+     - 如果只有月/日（如 7/11），請假設為當前年份 ${currentYear}
+     - 如果只有時間（如 13:30），請結合文本中的日期
+     - 每個事件必須包含：{"type": "事件類型", "title": "事件標題", "date": "YYYY-MM-DDTHH:mm:ss", "description": "詳細描述"}
 
-  你的輸出必須是嚴格的 JSON 格式，不包含任何額外的解釋或註釋。
+  特別注意：
+  - 仔細識別文本中的時間表達（如「下週五 7/11 13:30」）
+  - 將相對時間轉換為具體日期
+  - 確保提取的標題有意義且具體
+
+  你的輸出必須是嚴格的 JSON 格式，不包含任何額外的解釋或註釋。格式如下：
+
+  {
+    "title": "具體的事件或內容標題",
+    "category": "選擇的分類",
+    "tags": ["標籤1", "標籤2", "標籤3"],
+    "info": "內容摘要",
+    "events": [{"type": "meeting", "title": "事件標題", "date": "2024-07-11T13:30:00", "description": "詳細描述"}]
+  }
 
   文本內容如下：
   """
@@ -563,18 +582,37 @@ async function analyzeTextFunction(message) {
     const response = await callLLMWithRetryLogic(prompt, isAnalysisResponseValid);
     let jsonString = response.text().replace(/```json\n?|```/g, '').trim();
     const data = JSON.parse(jsonString);
+    
+    // 將 events 中的 date 字串轉換為 Date 物件
+    if (data.events && Array.isArray(data.events)) {
+      data.events = data.events.map(event => {
+        if (event.date && typeof event.date === 'string') {
+          const eventDate = new Date(event.date);
+          if (!isNaN(eventDate.getTime())) {
+            return { ...event, date: eventDate };
+          }
+        }
+        return null; // 如果日期無效，則過濾掉
+      }).filter(Boolean); // 移除 null
+      
+      console.log(`📅 從文本中提取到 ${data.events.length} 個事件`);
+      data.events.forEach(event => {
+        console.log(`  • [${event.type}] ${event.title} - ${event.date.toLocaleString('zh-TW')}`);
+      });
+    }
+    
     console.log('✅ 成功分析文本:', data.title);
-    return [data];
+    return data;
   } catch (error) {
     console.error('分析文本時發生無法恢復的錯誤:', error);
-    return [{
+    return {
       title: "分析失敗",
       category: "其他",
       tags: ["錯誤"],
       info: `無法解析以下文本: ${message}`,
       url: null,
       events: []
-    }];
+    };
   }
 }
 
