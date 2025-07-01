@@ -640,7 +640,7 @@ function checkInternetConnection() {
 }
 
 const port = process.env.PORT || 3000;
-app.listen(port, '0.0.0.0', () => {
+app.listen(port, '0.0.0.0', async () => {
   console.log(`Server is running on port ${port}`);
   const baseUrl = process.env.BASE_URL || 'https://line-helper.onrender.com';
   console.log(`Webhook URL: ${baseUrl}/webhook`);
